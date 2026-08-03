@@ -1,0 +1,49 @@
+# ---------------------------------------------------------------
+# Assignment 11 - AI Legal Document Review & Compliance Platform
+# Save this file as:  <project root>/.gitignore
+# ---------------------------------------------------------------
+
+# --- Secrets: never commit. .env.example IS committed (fake values). ---
+.env
+.env.*
+!.env.example
+
+# --- Dataset: several GB, and CUAD is redistributed from its own source ---
+data/
+
+# --- Python ---
+.venv/
+venv/
+env/
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.pytest_cache/
+.ipynb_checkpoints/
+
+# --- n8n: local runtime state, encryption key, SQLite DB ---
+# Exported workflow JSON in workflows/ IS committed - it is a deliverable.
+.n8n/
+n8n_data/
+docker-compose.override.yml
+
+# --- Credentials that must never reach GitHub ---
+*credentials*.json
+*service-account*.json
+*.pem
+*.key
+
+# --- Editors / OS ---
+.vscode/
+.idea/
+.cursor/
+Thumbs.db
+desktop.ini
+ehthumbs.db
+
+# --- Logs and scratch ---
+*.log
+logs/
+tmp/
+scratch/

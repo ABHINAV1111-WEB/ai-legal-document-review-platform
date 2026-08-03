@@ -1,0 +1,27 @@
+# ---------------------------------------------------------------
+# Assignment 11 - AI Legal Document Review & Compliance Platform
+# Save this file as:  <project root>/requirements.txt
+#
+# Install with:   pip install -r requirements.txt
+#
+# Only DIRECT dependencies are listed. pip resolves the rest.
+# Version floors (>=) keep this installable months from now while
+# still refusing versions too old to have the APIs we rely on.
+# ---------------------------------------------------------------
+
+# PostgreSQL driver - used by load_gold_labels.py and evaluate.py to
+# talk to Supabase. The "-binary" build ships precompiled wheels, so
+# Windows users do not need a C compiler or local Postgres headers.
+psycopg2-binary>=2.9.9
+
+# Reads the .env file at runtime so secrets stay out of the source code.
+python-dotenv>=1.0.1
+
+
+# --- Deliberately NOT included ---
+# pdfplumber / PyPDF: PDF text extraction happens inside n8n's
+#   "Extract from File" node (WF2), not in Python.
+# scikit-learn: precision/recall in evaluate.py is a handful of set
+#   operations - a 100 MB dependency for four lines of arithmetic is
+#   not worth it.
+# Add packages here ONLY when a script actually imports them.
