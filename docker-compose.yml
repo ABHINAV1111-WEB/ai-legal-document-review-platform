@@ -1,0 +1,85 @@
+# ===============================================================
+# Assignment 11 - AI Legal Document Review & Compliance Platform
+#
+# Save as: <project root>/docker-compose.yml
+#
+# Start :  docker compose up -d
+# Stop  :  docker compose down          (data survives)
+# Logs  :  docker compose logs -f n8n
+#
+# Reads values from the .env file sitting next to this file.
+# ===============================================================
+
+services:
+  n8n:
+    image: docker.n8n.io/n8nio/n8n:latest
+    container_name: assign11-n8n
+    restart: unless-stopped
+
+    ports:
+      # host:container - open http://localhost:5678 in a browser
+      - "5678:5678"
+
+    environment:
+      # --- Credential encryption -------------------------------
+      # n8n encrypts saved credentials with this key. If it is not
+      # set, n8n generates a random one and hides it inside the
+      # container. Rebuild the container and every saved credential
+      # becomes unreadable. Setting it explicitly makes the setup
+      # reproducible on any machine.
+      - N8N_ENCRYPTION_KEY=${N8N_ENCRYPTION_KEY}
+
+      # --- Timezone --------------------------------------------
+      # WF5 runs on a daily cron. Without this, n8n schedules in UTC
+      # and a "9am" reminder fires at 2:30pm India time.
+      - GENERIC_TIMEZONE=Asia/Kolkata
+      - TZ=Asia/Kolkata
+
+      # --- Local access ----------------------------------------
+      # n8n insists on HTTPS cookies unless told otherwise. This is
+      # safe for localhost development only; a deployed instance
+      # should run behind HTTPS with this removed.
+      - N8N_SECURE_COOKIE=false
+
+      # Silences a startup warning about file permissions on the
+      # mounted config directory.
+      - N8N_ENFORCE_SETTINGS_FILE_PERMISSIONS=true
+
+      # Lets Code nodes import Node's built-in crypto module,
+      # needed by WF1 to compute the file hash used for dedup.
+      - NODE_FUNCTION_ALLOW_BUILTIN=crypto
+      
+      # --- Filesystem access -----------------------------------
+      # n8n blocks disk access outside an allow-list by default.
+      # Without this, the Read Files node fails with
+      # "Access to the file is not allowed".
+      - N8N_BLOCK_FILE_ACCESS_TO_N8N_FILES=true
+      - N8N_RESTRICT_FILE_ACCESS_TO=/data/prepared;/files
+
+
+      # --- Housekeeping ----------------------------------------
+      # Drop execution history older than 7 days (168 hours) so
+      # n8n's internal database does not grow without limit during
+      # six weeks of repeated test runs.
+      - EXECUTIONS_DATA_PRUNE=true
+      - EXECUTIONS_DATA_MAX_AGE=168
+
+    volumes:
+      # n8n's own storage: workflows, credentials, execution history.
+      # A named volume, so "docker compose down" does not erase it.
+      - n8n_data:/home/node/.n8n
+
+      # The prepared contracts, mounted READ-ONLY inside the
+      # container at /data/prepared. Read-only because no workflow
+      # should ever modify the source corpus.
+      #
+      # HOLDOUT REMINDER: /data/prepared/holdout is visible here.
+      # No workflow may read it before Phase 4.
+      - ./data/prepared:/data/prepared:ro
+
+      # Scratch space for files a workflow produces during a run.
+      - ./data/n8n_files:/files
+
+volumes:
+  n8n_data:
+    name: assign11_n8n_data
