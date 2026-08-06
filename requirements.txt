@@ -25,3 +25,4 @@ python-dotenv>=1.0.1
 #   operations - a 100 MB dependency for four lines of arithmetic is
 #   not worth it.
 # Add packages here ONLY when a script actually imports them.
+requests>=2.31.0
