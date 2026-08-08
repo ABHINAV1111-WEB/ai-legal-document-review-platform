@@ -1,0 +1,261 @@
+{
+  "name": "WF0 - Throwaway PDF Test",
+  "nodes": [
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        0
+      ],
+      "id": "0d9d6b68-a7d4-417a-8111-96c491838a40",
+      "name": "When clicking ‘Execute workflow’"
+    },
+    {
+      "parameters": {
+        "fileSelector": "/data/prepared/dev/*.pdf",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.readWriteFile",
+      "typeVersion": 1.1,
+      "position": [
+        208,
+        0
+      ],
+      "id": "c3186fd5-435f-46ad-867f-3d86a801b49d",
+      "name": "Read/Write Files from Disk"
+    },
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.limit",
+      "typeVersion": 1,
+      "position": [
+        416,
+        0
+      ],
+      "id": "0a34b32a-4899-40c1-b924-6f88e835ba54",
+      "name": "Limit"
+    },
+    {
+      "parameters": {
+        "operation": "pdf",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.extractFromFile",
+      "typeVersion": 1.1,
+      "position": [
+        624,
+        0
+      ],
+      "id": "5ff580df-831b-4259-9106-263dcf54288a",
+      "name": "Extract from File"
+    },
+    {
+      "parameters": {
+        "jsCode": "const crypto = require('crypto');\n\nconst item = $input.first();\nconst text = item.json.text || '';\nconst pages = item.json.numpages || null;\n\n// The Extract node drops binary metadata, so reach back to the source node.\nconst fileInfo = $('Read/Write Files from Disk').first().binary.data;\nconst filename = fileInfo.fileName;\n\n// SHA-256 of the extracted text. In WF1 this hashes the raw file bytes;\n// here it just proves the crypto module is importable.\nconst fileHash = crypto.createHash('sha256').update(text).digest('hex');\n\nreturn [{\n  json: {\n    filename: filename,\n    file_hash: fileHash,\n    page_count: pages,\n    doc_type: 'contract',\n    status: 'extracted',\n    char_count: text.length,\n  },\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        832,
+        0
+      ],
+      "id": "1eacfbc8-05d7-4023-93ee-6f69c2cd061a",
+      "name": "Build Row"
+    },
+    {
+      "parameters": {
+        "schema": {
+          "__rl": true,
+          "mode": "list",
+          "value": "public"
+        },
+        "table": {
+          "__rl": true,
+          "value": "documents",
+          "mode": "list",
+          "cachedResultName": "documents"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "page_count": "={{ $json.page_count }}",
+            "filename": "={{ $json.filename }}",
+            "file_hash": "={{ $json.file_hash }}",
+            "doc_type": "={{ $json.doc_type }}",
+            "status": "={{ $json.status }}"
+          },
+          "matchingColumns": [
+            "id"
+          ],
+          "schema": [
+            {
+              "id": "id",
+              "displayName": "id",
+              "required": false,
+              "defaultMatch": true,
+              "display": true,
+              "type": "number",
+              "canBeUsedToMatch": true,
+              "removed": true
+            },
+            {
+              "id": "filename",
+              "displayName": "filename",
+              "required": true,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "file_hash",
+              "displayName": "file_hash",
+              "required": true,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "drive_url",
+              "displayName": "drive_url",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "doc_type",
+              "displayName": "doc_type",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "page_count",
+              "displayName": "page_count",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "number",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "status",
+              "displayName": "status",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "uploaded_at",
+              "displayName": "uploaded_at",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "dateTime",
+              "canBeUsedToMatch": true,
+              "removed": true
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "position": [
+        1040,
+        0
+      ],
+      "id": "7134c55c-6425-4ae1-9af0-4843b634e794",
+      "name": "Insert rows in a table",
+      "credentials": {
+        "postgres": {
+          "id": "K6Aq0yB2ZPCqoQiA",
+          "name": "Supabase Postgres - Assign11"
+        }
+      }
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "When clicking ‘Execute workflow’": {
+      "main": [
+        [
+          {
+            "node": "Read/Write Files from Disk",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read/Write Files from Disk": {
+      "main": [
+        [
+          {
+            "node": "Limit",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Limit": {
+      "main": [
+        [
+          {
+            "node": "Extract from File",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract from File": {
+      "main": [
+        [
+          {
+            "node": "Build Row",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Row": {
+      "main": [
+        [
+          {
+            "node": "Insert rows in a table",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "availableInMCP": false
+  },
+  "versionId": "069104c3-155a-4b38-a9b5-99e771c09662",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "0031f5595dbe624837214def158854fa79038e53274f4301c3ad8528756175ac"
+  },
+  "nodeGroups": [],
+  "id": "9In1mSGc2uumfUkL",
+  "tags": []
+}

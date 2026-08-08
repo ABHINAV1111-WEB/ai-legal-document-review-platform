@@ -1,0 +1,391 @@
+{
+  "name": "WF1 - Ingestion & Storage",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "ingest-contract",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        -128,
+        64
+      ],
+      "id": "a2b8322b-de43-42df-8254-8ce2c757a735",
+      "name": "Webhook",
+      "webhookId": "6d06fc23-f2b4-462b-a497-74c04aa0cf8a"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "609cc95b-6a8d-4590-9f6e-ea7b0a560f83",
+              "name": "=filename",
+              "value": "={{ $binary.file.fileName }}",
+              "type": "string"
+            },
+            {
+              "id": "78fb7e03-623d-4b83-9f30-de72c8f283db",
+              "name": "=mime_type",
+              "value": "={{ $binary.file.mimeType }}",
+              "type": "string"
+            },
+            {
+              "id": "813f9f92-f9d1-4bd5-97ec-5ca0316405a6",
+              "name": "=received_at",
+              "value": "={{ $now.toISO() }}",
+              "type": "string"
+            }
+          ]
+        },
+        "includeOtherFields": true,
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.5,
+      "position": [
+        32,
+        48
+      ],
+      "id": "897c4b48-846f-4e2b-90ce-2cbd1f5c92bc",
+      "name": "Normalize Input"
+    },
+    {
+      "parameters": {
+        "jsCode": "const crypto = require('crypto');\nconst out = [];\n\nfor (const item of $input.all()) {\n  const binaryKey = 'file';\n\n  if (!item.binary || !item.binary[binaryKey]) {\n    throw new Error(\n      `No binary data under key \"${binaryKey}\". ` +\n      `Found: ${item.binary ? Object.keys(item.binary).join(', ') : 'none'}`\n    );\n  }\n\n  const buffer = await this.helpers.getBinaryDataBuffer(\n    out.length,\n    binaryKey\n  );\n\n  const fileHash = crypto\n    .createHash('sha256')\n    .update(buffer)\n    .digest('hex');\n\n  out.push({\n    json: {\n      ...item.json,\n      file_hash: fileHash,\n      file_size_bytes: buffer.length,\n    },\n    binary: item.binary,\n  });\n}\n\nreturn out;"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        192,
+        48
+      ],
+      "id": "7ac2eb6f-d6b9-409e-9511-dd12bfe9ef2d",
+      "name": "Compute File Hash"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT id, filename, uploaded_at\nFROM documents\nWHERE file_hash = $1;",
+        "options": {
+          "queryReplacement": "={{ [$json.file_hash] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "position": [
+        384,
+        64
+      ],
+      "id": "15173325-9bf4-4731-a2f5-81c1761ec279",
+      "name": "Check Duplicate",
+      "alwaysOutputData": true,
+      "credentials": {
+        "postgres": {
+          "id": "K6Aq0yB2ZPCqoQiA",
+          "name": "Supabase Postgres - Assign11"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "fcb8c4ac-0674-4104-848b-6f369f7f0be9",
+              "leftValue": "={{ $json.existing_id }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "exists",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        784,
+        64
+      ],
+      "id": "4ae7410d-b828-4e5c-bf0d-9b996879f257",
+      "name": "Is Duplicate?"
+    },
+    {
+      "parameters": {
+        "operation": "write",
+        "fileName": "={{ $json.storage_path }}",
+        "dataPropertyName": "file",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.readWriteFile",
+      "typeVersion": 1.1,
+      "position": [
+        944,
+        320
+      ],
+      "id": "19b7ea35-3130-467c-8957-85512b80f403",
+      "name": "Save PDF"
+    },
+    {
+      "parameters": {
+        "jsCode": "// The Postgres node replaces its input with query results, so both the\n// binary PDF and our JSON fields were dropped. Reach back to the last\n// node that had them and reattach the duplicate-check outcome.\n\n// Where ingested PDFs live inside the container. This maps to\n// ./data/n8n_files/ingested on the host via docker-compose.\n// Defined ONCE here; Save PDF and Insert Document both read it.\nconst STORAGE_DIR = '/files/ingested';\n\nconst source = $('Compute File Hash').all();\nconst dupRows = $input.all();\nconst out = [];\n\nfor (let i = 0; i < source.length; i++) {\n  const row = dupRows[i] ? dupRows[i].json : {};\n  const json = { ...source[i].json };\n\n  // Content-addressed: the file is named by its own hash.\n  json.storage_path = `${STORAGE_DIR}/${json.file_hash}.pdf`;\n\n  // Only set the key when a match was actually found, so the IF node\n  // can test \"exists\" rather than \"is not null\".\n  if (row && row.id !== undefined && row.id !== null) {\n    json.existing_id = row.id;\n    json.existing_filename = row.filename;\n    json.existing_uploaded_at = row.uploaded_at;\n  }\n\n  out.push({ json, binary: source[i].binary });\n}\n\nreturn out;"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        592,
+        80
+      ],
+      "id": "1eac4c57-b927-4869-b868-8b7f3452fe08",
+      "name": "Restore Context"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO documents (filename, file_hash, drive_url, doc_type, status)\nVALUES ($1, $2, $3, 'contract', 'uploaded')\nON CONFLICT (file_hash) DO NOTHING\nRETURNING id, filename, file_hash, status, uploaded_at;",
+        "options": {
+          "queryReplacement": "={{ [$json.filename, $json.file_hash, $json.storage_path] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "position": [
+        1152,
+        320
+      ],
+      "id": "9022c1e8-585a-45ed-88cb-0294c52649b4",
+      "name": "Insert Document",
+      "alwaysOutputData": true,
+      "credentials": {
+        "postgres": {
+          "id": "K6Aq0yB2ZPCqoQiA",
+          "name": "Supabase Postgres - Assign11"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ status: \"accepted\", document_id: $json.id, filename: $json.filename, file_hash: $json.file_hash }) }}",
+        "options": {
+          "responseCode": 202
+        }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        1344,
+        192
+      ],
+      "id": "0fc1838d-cbfb-42f6-9bad-455134b81895",
+      "name": "Respond Accepted"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ status: \"already_ingested\", document_id: $json.existing_id, filename: $json.filename, uploaded_at: $json.existing_uploaded_at }) }}",
+        "options": {
+          "responseCode": 200
+        }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        1168,
+        -64
+      ],
+      "id": "26d9cd1a-f761-4422-acd7-93a57ecaed79",
+      "name": "Respond Duplicate"
+    },
+    {
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "G4fQd4uqFRw8RdgO",
+          "mode": "list",
+          "cachedResultUrl": "/workflow/G4fQd4uqFRw8RdgO",
+          "cachedResultName": "WF2 - OCR & Segmentation"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "storage_path": "={{ $('Restore Context').item.json.storage_path }}",
+            "document_id": "={{ Number($json.id) }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "document_id",
+              "displayName": "document_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "number"
+            },
+            {
+              "id": "storage_path",
+              "displayName": "storage_path",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": true
+        },
+        "options": {
+          "waitForSubWorkflow": true
+        }
+      },
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.3,
+      "position": [
+        1504,
+        208
+      ],
+      "id": "d9845b1a-cf8e-4f80-8e02-33daa5db05d6",
+      "name": "Call WF2"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Normalize Input",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize Input": {
+      "main": [
+        [
+          {
+            "node": "Compute File Hash",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Compute File Hash": {
+      "main": [
+        [
+          {
+            "node": "Check Duplicate",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Duplicate": {
+      "main": [
+        [
+          {
+            "node": "Restore Context",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Is Duplicate?": {
+      "main": [
+        [
+          {
+            "node": "Respond Duplicate",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Save PDF",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Save PDF": {
+      "main": [
+        [
+          {
+            "node": "Insert Document",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Restore Context": {
+      "main": [
+        [
+          {
+            "node": "Is Duplicate?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Insert Document": {
+      "main": [
+        [
+          {
+            "node": "Respond Accepted",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Respond Accepted": {
+      "main": [
+        [
+          {
+            "node": "Call WF2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "availableInMCP": false
+  },
+  "versionId": "b3e47ca2-ea86-4e7c-a4ff-60cfaeab9f04",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "0031f5595dbe624837214def158854fa79038e53274f4301c3ad8528756175ac"
+  },
+  "nodeGroups": [],
+  "id": "usG1BmNUY8ltGJ0o",
+  "tags": []
+}
