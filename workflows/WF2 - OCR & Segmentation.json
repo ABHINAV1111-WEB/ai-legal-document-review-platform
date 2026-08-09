@@ -1,0 +1,248 @@
+{
+  "name": "WF2 - OCR & Segmentation",
+  "nodes": [
+    {
+      "parameters": {
+        "workflowInputs": {
+          "values": [
+            {
+              "name": "document_id",
+              "type": "number"
+            },
+            {
+              "name": "storage_path"
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        -32,
+        0
+      ],
+      "id": "ff39ac04-cdca-464b-bc00-aeee5ea48a45",
+      "name": "When Executed by Another Workflow"
+    },
+    {
+      "parameters": {
+        "fileSelector": "={{ $json.storage_path }}",
+        "options": {
+          "dataPropertyName": "data"
+        }
+      },
+      "type": "n8n-nodes-base.readWriteFile",
+      "typeVersion": 1.1,
+      "position": [
+        144,
+        0
+      ],
+      "id": "cb970605-5643-4d68-91a9-e1114fd54526",
+      "name": "Read PDF"
+    },
+    {
+      "parameters": {
+        "operation": "pdf",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.extractFromFile",
+      "typeVersion": 1.1,
+      "position": [
+        336,
+        0
+      ],
+      "id": "b019ffc7-891d-457c-b49b-5680f28d7fa1",
+      "name": "Extract Text"
+    },
+    {
+      "parameters": {
+        "jsCode": "// WF2 - Clean Text\n// Normalises raw pdf-parse output into ONE canonical string.\n//\n// Every char_start/char_end stored later is an offset into THIS\n// string, so this transformation must be deterministic and must\n// never run twice with different settings on the same document.\n\nconst ctx = $('When Executed by Another Workflow').first().json;\nconst raw = $input.first().json.text || '';\nconst numpages = $input.first().json.numpages || null;\n\nlet text = raw\n  // Windows/Mac line endings -> \\n, so offsets are consistent\n  .replace(/\\r\\n/g, '\\n')\n  .replace(/\\r/g, '\\n')\n\n  // Typographic punctuation -> ASCII. PDFs from Word are full of\n  // these; leaving them means a prompt or regex matching \" misses.\n  .replace(/[\\u2018\\u2019\\u201A\\u201B]/g, \"'\")\n  .replace(/[\\u201C\\u201D\\u201E\\u201F]/g, '\"')\n  .replace(/[\\u2013\\u2014]/g, '-')\n  .replace(/\\u2026/g, '...')\n\n  // Non-breaking space and friends -> normal space\n  .replace(/[\\u00A0\\u2007\\u202F]/g, ' ')\n\n  // Soft hyphen: invisible, but breaks word matching\n  .replace(/\\u00AD/g, '')\n\n  // Word split across a line break: \"distrib-\\nutor\" -> \"distributor\"\n  .replace(/(\\w)-\\n(\\w)/g, '$1$2')\n\n  // A single \\n inside a sentence is a PDF line wrap, not a\n  // paragraph break. Join it. Two or more \\n IS a real break, so\n  // this pattern deliberately requires a non-newline on both sides.\n  .replace(/([^\\n])\\n(?!\\n)/g, '$1 ')\n\n  // Collapse runs of spaces/tabs, but NOT newlines\n  .replace(/[ \\t]{2,}/g, ' ')\n\n  // 3+ blank lines -> exactly 2\n  .replace(/\\n{3,}/g, '\\n\\n')\n\n  .trim();\n\nreturn [{\n  json: {\n    document_id: ctx.document_id,\n    storage_path: ctx.storage_path,\n    page_count: numpages,\n    full_text: text,\n    text_char_count: text.length,\n  },\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        496,
+        0
+      ],
+      "id": "e2545ce9-0816-4b1a-bb0a-14a39c67a390",
+      "name": "Clean Text"
+    },
+    {
+      "parameters": {
+        "jsCode": "// ===============================================================\n// WF2 - OCR & Segmentation\n// Node: \"Segment Text\"  (Code node, Mode: Run Once for All Items)\n//\n// Repo copy: <project root>/workflows/code/wf2_segment_text.js\n// Paste into: n8n -> WF2 -> Segment Text -> JavaScript field\n//             (replace the ENTIRE contents of the field)\n//\n// Splits full_text into numbered segments at contract section\n// headings, e.g. \"1.\", \"1.1\", \"ARTICLE V\", \"SECTION 3\".\n//\n// Why heading-based and not fixed-size chunks: WF3 asks an LLM\n// \"is there a Governing Law clause in this text?\". A clause cut in\n// half by an arbitrary character boundary gets missed, and a missed\n// clause is a recall failure that lands directly in the Phase 4\n// number. Contract numbering is the document's own structure -\n// splitting on it keeps clauses intact.\n//\n// char_start / char_end are offsets into full_text, so any clause\n// WF3 finds can be located back in the original contract and\n// compared against a CUAD gold span.\n// ===============================================================\n\nconst item = $input.first().json;\nconst text = item.full_text || '';\n\n// ---------------------------------------------------------------\n// Heading pattern\n//\n// IMPORTANT: headings do NOT sit at line starts here. The upstream\n// \"Clean Text\" node deliberately joins wrapped lines, so by this\n// point \"2. LICENSED PROGRAMS\" sits mid-paragraph. Anchoring with\n// a bare ^ therefore matches almost nothing - that bug produced 7\n// giant paragraph-fallback segments instead of real sections.\n//\n// So: match either start-of-text/line OR a position immediately\n// after sentence-ending punctuation.\n//\n// The trailing lookahead is what rejects false positives. A date\n// like \"as of July 1. The parties agree\" has a number and a period,\n// but \"The\" is not a section title. Real contract headings are\n// ALL CAPS (\"2. LICENSED PROGRAMS\"), or introduce a lettered\n// sub-clause \"(a)\", or a further number. Requiring one of those\n// three shapes filters prose out.\n//\n// Flags are `gm`, NOT `gim`. Case-insensitive would let the\n// [A-Z]{2} lookahead match ordinary lowercase words and the filter\n// would collapse.\n// ---------------------------------------------------------------\nconst HEADING = /(?:^|(?<=[.;:!?]\\s))[ \\t]*((?:\\d+\\.)+\\d*|(?:ARTICLE|SECTION|EXHIBIT|SCHEDULE|APPENDIX)\\s+[IVXLC\\d]+)[.:) ]+(?=[A-Z]{2}|\\(?[a-z]\\)|\\d)/gm;\n\n// Collect every heading position first, then slice between them.\nconst marks = [];\nlet m;\nwhile ((m = HEADING.exec(text)) !== null) {\n  marks.push({ index: m.index, label: m[1].trim() });\n}\n\nconst MIN_CHARS = 120;    // shorter than this is a stray number, not a section\nconst MAX_CHARS = 6000;   // guard: an unnumbered contract must not become one giant segment\n\nconst segments = [];\n\nif (marks.length === 0) {\n  // No numbering found at all. Fall back to paragraph blocks so the\n  // document still gets processed instead of silently yielding zero.\n  let cursor = 0;\n  const paras = text.split(/\\n{2,}/);\n  for (const p of paras) {\n    const start = text.indexOf(p, cursor);\n    if (p.trim().length >= MIN_CHARS) {\n      segments.push({ heading: null, start, end: start + p.length });\n    }\n    cursor = start + p.length;\n  }\n} else {\n  // Preamble before the first heading (parties, recitals) matters -\n  // Governing Law and Anti-Assignment sometimes live in recitals.\n  if (marks[0].index >= MIN_CHARS) {\n    segments.push({ heading: null, start: 0, end: marks[0].index });\n  }\n  for (let i = 0; i < marks.length; i++) {\n    const start = marks[i].index;\n    const end = i + 1 < marks.length ? marks[i + 1].index : text.length;\n    if (end - start >= MIN_CHARS) {\n      segments.push({ heading: marks[i].label, start, end });\n    }\n  }\n}\n\n// Split any oversized segment on paragraph boundaries, so a single\n// unnumbered wall of text does not blow up the WF3 token budget.\nconst sized = [];\nfor (const s of segments) {\n  if (s.end - s.start <= MAX_CHARS) {\n    sized.push(s);\n    continue;\n  }\n  let cur = s.start;\n  while (cur < s.end) {\n    let cut = Math.min(cur + MAX_CHARS, s.end);\n    if (cut < s.end) {\n      const brk = text.lastIndexOf('\\n\\n', cut);\n      if (brk > cur + MIN_CHARS) cut = brk;\n    }\n    sized.push({ heading: s.heading, start: cur, end: cut });\n    cur = cut;\n  }\n}\n\nconst out = sized.map((s, i) => ({\n  seq_no: i + 1,\n  heading: s.heading,\n  segment_text: text.slice(s.start, s.end).trim(),\n  char_start: s.start,\n  char_end: s.end,\n  char_count: s.end - s.start,\n}));\n\n// Everything stays in ONE item rather than fanning out to many.\n// The next node must DELETE this document's old segments before\n// inserting, and that delete has to happen exactly once per\n// document - not once per segment.\nreturn [{\n  json: {\n    document_id: item.document_id,\n    storage_path: item.storage_path,\n    page_count: item.page_count,\n    full_text: item.full_text,\n    text_char_count: item.text_char_count,\n    segment_count: out.length,\n    segments: out,\n  },\n}];\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        704,
+        0
+      ],
+      "id": "7df661a7-9bae-4b73-8b1b-1b8437f0af63",
+      "name": "Segment Text"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "DELETE FROM document_segments WHERE document_id = $1;",
+        "options": {
+          "queryReplacement": "={{ [Number($json.document_id)] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "position": [
+        912,
+        0
+      ],
+      "id": "ab045a14-bed0-4b80-bafb-304713c9b135",
+      "name": "Delete Old Segments",
+      "alwaysOutputData": true,
+      "credentials": {
+        "postgres": {
+          "id": "K6Aq0yB2ZPCqoQiA",
+          "name": "Supabase Postgres - Assign11"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO document_segments\n    (document_id, seq_no, heading, segment_text, char_start, char_end, char_count)\nSELECT\n    $1::BIGINT,\n    (s->>'seq_no')::INTEGER,\n    s->>'heading',\n    s->>'segment_text',\n    (s->>'char_start')::INTEGER,\n    (s->>'char_end')::INTEGER,\n    (s->>'char_count')::INTEGER\nFROM jsonb_array_elements($2::JSONB) AS s\nON CONFLICT (document_id, seq_no) DO UPDATE SET\n    heading      = EXCLUDED.heading,\n    segment_text = EXCLUDED.segment_text,\n    char_start   = EXCLUDED.char_start,\n    char_end     = EXCLUDED.char_end,\n    char_count   = EXCLUDED.char_count\nRETURNING id;",
+        "options": {
+          "queryReplacement": "={{ [Number($('Segment Text').first().json.document_id), JSON.stringify($('Segment Text').first().json.segments)] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "position": [
+        1184,
+        0
+      ],
+      "id": "1deaedab-71ca-4a28-97a6-02043dee57c6",
+      "name": "Insert Segments",
+      "credentials": {
+        "postgres": {
+          "id": "K6Aq0yB2ZPCqoQiA",
+          "name": "Supabase Postgres - Assign11"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE documents\nSET full_text       = $2,\n    text_char_count = $3::INTEGER,\n    segment_count   = $4::INTEGER,\n    page_count      = $5::INTEGER,\n    extracted_at    = NOW(),\n    status          = 'extracted'\nWHERE id = $1::BIGINT\nRETURNING id, segment_count, text_char_count, status;",
+        "options": {
+          "queryReplacement": "={{ [Number($('Segment Text').first().json.document_id), $('Segment Text').first().json.full_text, Number($('Segment Text').first().json.text_char_count), Number($('Segment Text').first().json.segment_count), Number($('Segment Text').first().json.page_count)] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "position": [
+        1392,
+        0
+      ],
+      "id": "802eba34-c224-48f3-bb1f-64b3c5ab9c56",
+      "name": "Update Document",
+      "credentials": {
+        "postgres": {
+          "id": "K6Aq0yB2ZPCqoQiA",
+          "name": "Supabase Postgres - Assign11"
+        }
+      }
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "When Executed by Another Workflow": {
+      "main": [
+        [
+          {
+            "node": "Read PDF",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read PDF": {
+      "main": [
+        [
+          {
+            "node": "Extract Text",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract Text": {
+      "main": [
+        [
+          {
+            "node": "Clean Text",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Clean Text": {
+      "main": [
+        [
+          {
+            "node": "Segment Text",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Segment Text": {
+      "main": [
+        [
+          {
+            "node": "Delete Old Segments",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Delete Old Segments": {
+      "main": [
+        [
+          {
+            "node": "Insert Segments",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Insert Segments": {
+      "main": [
+        [
+          {
+            "node": "Update Document",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "availableInMCP": false
+  },
+  "versionId": "e0e6dd64-196c-4bf8-8436-d40f6df8de90",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "0031f5595dbe624837214def158854fa79038e53274f4301c3ad8528756175ac"
+  },
+  "nodeGroups": [],
+  "id": "G4fQd4uqFRw8RdgO",
+  "tags": []
+}
