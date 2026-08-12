@@ -3,18 +3,28 @@
  * Node: "Parse & Validate"  (Code node, Mode = Run Once for All Items)
  *
  * Repo copy: workflows/code/wf3_parse_validate.js
- * Version 2 - segment resolution is now evidence-based.
+ * Version 3 - character-tolerant matching with offset recovery.
  *
- * WHAT CHANGED FROM v1
+ * HISTORY
  * v1 trusted the model's [SEG n] marker to identify the source segment.
- * On the first real run, 2 of 5 clauses cited a seq_no that was not in
- * their own batch, so segment_id and both character offsets came back
- * null. Batching buys speed at the cost of the model having to count
- * markers correctly, and it does not always manage it.
+ *    2 of 5 clauses cited a seq_no not in their own batch, so segment_id
+ *    and both offsets came back null.
+ * v2 searched the batch's segments for the quoted text instead, using
+ *    the marker only as a hint. That fixed attribution, but on 108 real
+ *    extractions 20 clauses (18%) still could not be located at all.
+ * v3 diagnoses those 20. The v2 whitespace-tolerant pass fired ZERO
+ *    times, which proves the mismatches were never whitespace alone.
+ *    The surviving cause is character-level: the model reproduces the
+ *    typography it read in the PDF (U+2019 apostrophes, U+201C/D
+ *    quotes, en-dashes) while WF2's Clean Text already rewrote the
+ *    stored copy to ASCII. The two strings are semantically identical
+ *    and render identically in any console or CSV, which is why three
+ *    rounds of eyeballing the text found nothing.
  *
- * v2 searches the batch's segments for the quoted text and uses
- * whichever segment actually contains it. The model's seq_no is only a
- * fallback hint. Traceability no longer depends on the model counting.
+ *    v3 normalises every class of difference at once and keeps an index
+ *    map so true character offsets survive tolerant matching. It also
+ *    adds a pass for clauses split across a segment boundary by WF2's
+ *    6000-char MAX_CHARS cut - those exist in neither half alone.
  *
  * OUTPUT: one item per clause row, ready for INSERT.
  */
@@ -30,20 +40,70 @@ const CLAUSE_TYPES = [
   'Anti-Assignment',
 ];
 
-/** Collapse whitespace so a line-wrap difference is not read as a mismatch. */
+/** Whitespace only. Used for the dedup key, where offsets do not matter. */
 const norm = (s) => (s || '').replace(/\s+/g, ' ').trim();
 
+/**
+ * Aggressive normalisation for MATCHING.
+ *
+ * Returns { text, idx } where idx[i] is the position in the ORIGINAL
+ * string of normalised character i. That map is the whole point: without
+ * it, tolerant matching would mean giving up character offsets, and
+ * Phase 4 error analysis needs them to jump to the source text.
+ */
+function canonical(src) {
+  const s = src || '';
+  let out = '';
+  const idx = [];
+  let lastWasSpace = false;
+
+  for (let i = 0; i < s.length; i++) {
+    let ch = s[i];
+
+    // Typographic -> ASCII. Neither side is wrong; they just disagree.
+    if (ch === '\u2018' || ch === '\u2019' || ch === '\u02BC') ch = "'";
+    else if (ch === '\u201C' || ch === '\u201D') ch = '"';
+    else if (ch === '\u2013' || ch === '\u2014' || ch === '\u2212') ch = '-';
+    else if (ch === '\u00A0') ch = ' ';
+
+    if (/\s/.test(ch)) {
+      if (lastWasSpace) continue;          // collapse runs of whitespace
+      ch = ' ';
+      lastWasSpace = true;
+    } else {
+      lastWasSpace = false;
+    }
+
+    out += ch;
+    idx.push(i);
+  }
+
+  // Trim, keeping idx aligned. A stray leading space would shift every
+  // reported offset by one.
+  let start = 0;
+  let end = out.length;
+  while (start < end && out[start] === ' ') start++;
+  while (end > start && out[end - 1] === ' ') end--;
+
+  return { text: out.slice(start, end), idx: idx.slice(start, end) };
+}
+
 // ---------------------------------------------------------------
-// Lookup: segment_id -> text and absolute offset in full_text.
-// Built from Fetch Segments, never from anything the model reported.
+// Lookup: segment_id -> text, canonical form, and absolute offset in
+// full_text. Built from Fetch Segments, never from anything the model
+// reported. Canonical forms are computed once here rather than per
+// clause - otherwise every clause would redo the same work.
 // ---------------------------------------------------------------
 const segmentById = new Map();
 for (const row of $('Fetch Segments').all()) {
   const s = row.json;
   if (!s || !s.segment_text) continue;
+
+  const c = canonical(s.segment_text);
   segmentById.set(Number(s.segment_id), {
     text: s.segment_text,
-    textNorm: norm(s.segment_text),
+    canon: c.text,
+    canonIdx: c.idx,
     char_start: Number(s.char_start),
     seq_no: Number(s.seq_no),
   });
@@ -80,68 +140,87 @@ function extractClauses(json) {
 }
 
 /**
- * Find which segment of this batch actually contains the quoted text.
+ * Find which segment actually contains the quoted text.
  *
- * Order matters:
- *   1. Exact substring in the segment the model named. Cheapest, and
- *      correct whenever the model counted right.
- *   2. Exact substring in any other segment of the batch. Catches
- *      mis-attribution while still proving the quote is verbatim.
- *   3. Whitespace-normalised match anywhere in the batch. Proves the
- *      words are right even if line wrapping differs - but offsets
- *      cannot be trusted, so they are left null rather than guessed.
+ * Pass 1 - canonical match inside a single segment. Covers quote, dash
+ *          and whitespace differences, and still yields true offsets
+ *          through the index map. The segment the model named is tried
+ *          first, so a correct marker stays cheap.
+ * Pass 2 - canonical match across two ADJACENT segments joined
+ *          together. A clause cut in half by MAX_CHARS is invisible to
+ *          either half alone; this is the only way to find it. char_end
+ *          is left null because a single span across a boundary is not
+ *          meaningful.
  *
- * Returning offsets we are not sure of would be worse than returning
- * none: Phase 4 error analysis would follow them to the wrong place.
+ * Anything still unfound is a genuine paraphrase, and is reported as
+ * such rather than guessed at. Returning offsets we are not sure of
+ * would be worse than returning none: Phase 4 error analysis would
+ * follow them to the wrong place.
  */
 function locate(clauseText, batchSegments, hintedSeqNo) {
+  const needle = canonical(clauseText).text;
+  if (!needle) {
+    return { segment_id: null, char_start: null, char_end: null,
+             verbatim_ok: false, attribution: 'not_found' };
+  }
+
   const hinted = batchSegments.find(s => Number(s.seq_no) === Number(hintedSeqNo));
   const ordered = hinted
     ? [hinted, ...batchSegments.filter(s => s !== hinted)]
-    : batchSegments;
+    : batchSegments.slice();
 
-  // Passes 1 and 2: exact substring.
+  // ---- Pass 1: within a single segment ----
   for (const s of ordered) {
     const seg = segmentById.get(Number(s.segment_id));
-    if (!seg) continue;
-    const idx = seg.text.indexOf(clauseText);
-    if (idx !== -1) {
-      return {
-        segment_id: Number(s.segment_id),
-        char_start: seg.char_start + idx,
-        char_end: seg.char_start + idx + clauseText.length,
-        verbatim_ok: true,
-        attribution: hinted && Number(s.segment_id) === Number(hinted.segment_id)
-          ? 'model'          // model named the right segment
-          : 'recovered',     // model was wrong, text search fixed it
-      };
-    }
+    if (!seg || !seg.canon) continue;
+
+    const at = seg.canon.indexOf(needle);
+    if (at === -1) continue;
+
+    const origStart = seg.canonIdx[at];
+    const origEnd = seg.canonIdx[at + needle.length - 1] + 1;
+
+    return {
+      segment_id: Number(s.segment_id),
+      char_start: seg.char_start + origStart,
+      char_end: seg.char_start + origEnd,
+      verbatim_ok: true,
+      attribution: (hinted && Number(s.segment_id) === Number(hinted.segment_id))
+        ? 'model'          // model named the right segment
+        : 'recovered',     // model was wrong, text search fixed it
+    };
   }
 
-  // Pass 3: whitespace-tolerant.
-  const needle = norm(clauseText);
-  for (const s of ordered) {
-    const seg = segmentById.get(Number(s.segment_id));
-    if (!seg) continue;
-    if (seg.textNorm.includes(needle)) {
-      return {
-        segment_id: Number(s.segment_id),
-        char_start: null,
-        char_end: null,
-        verbatim_ok: true,
-        attribution: 'normalised',
-      };
-    }
+  // ---- Pass 2: spanning a segment boundary ----
+  const bySeq = batchSegments
+    .slice()
+    .sort((a, b) => Number(a.seq_no) - Number(b.seq_no));
+
+  for (let i = 0; i < bySeq.length - 1; i++) {
+    const a = segmentById.get(Number(bySeq[i].segment_id));
+    const b = segmentById.get(Number(bySeq[i + 1].segment_id));
+    if (!a || !b) continue;
+
+    // Joined with one space: the real gap between consecutive segments
+    // is whitespace, which canonical() would collapse anyway.
+    const joined = canonical(a.text + ' ' + b.text);
+    const at = joined.text.indexOf(needle);
+    if (at === -1) continue;
+
+    const origStart = joined.idx[at];
+    const inFirst = origStart < a.text.length;
+
+    return {
+      segment_id: Number(inFirst ? bySeq[i].segment_id : bySeq[i + 1].segment_id),
+      char_start: inFirst ? a.char_start + origStart : null,
+      char_end: null,
+      verbatim_ok: true,
+      attribution: 'spanning',
+    };
   }
 
-  // Nowhere in the batch: the model paraphrased despite instruction.
-  return {
-    segment_id: null,
-    char_start: null,
-    char_end: null,
-    verbatim_ok: false,
-    attribution: 'not_found',
-  };
+  return { segment_id: null, char_start: null, char_end: null,
+           verbatim_ok: false, attribution: 'not_found' };
 }
 
 const rows = [];
@@ -190,7 +269,8 @@ items.forEach((item, index) => {
         is_absent: false,
         reasoning: c.reasoning || null,
         verbatim_ok: found.verbatim_ok,
-        attribution: found.attribution,   // model | recovered | normalised | not_found
+        // model | recovered | spanning | not_found
+        attribution: found.attribution,
         model: MODEL,
         prompt_version: PROMPT_VERSION,
         batch_no: Number(batch.batch_no),
