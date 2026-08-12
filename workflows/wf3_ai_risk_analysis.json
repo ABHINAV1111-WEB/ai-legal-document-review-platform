@@ -1,0 +1,302 @@
+{
+  "name": "WF3 - AI Risk Analysis",
+  "nodes": [
+    {
+      "parameters": {
+        "workflowInputs": {
+          "values": [
+            {
+              "name": "document_id",
+              "type": "number"
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        0
+      ],
+      "id": "b18aed23-0f76-4595-bb80-f5557ff5714f",
+      "name": "When Executed by Another Workflow"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT s.id           AS segment_id,\n       s.seq_no,\n       s.heading,\n       s.segment_text,\n       s.char_start,\n       s.char_end,\n       s.char_count,\n       d.filename\nFROM document_segments s\nJOIN documents d ON d.id = s.document_id\nWHERE s.document_id = $1\nORDER BY s.seq_no;",
+        "options": {
+          "queryReplacement": "={{ [Number($json.document_id)] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "position": [
+        208,
+        0
+      ],
+      "id": "54f28db2-9e00-48bb-995d-da8398408a00",
+      "name": "Fetch Segments",
+      "alwaysOutputData": true,
+      "credentials": {
+        "postgres": {
+          "id": "K6Aq0yB2ZPCqoQiA",
+          "name": "Supabase Postgres - Assign11"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "/**\n * WF3 - AI Risk Analysis\n * Node: \"Build Batches\"  (Code node, Mode = Run Once for All Items)\n *\n * Repo copy: workflows/code/wf3_build_batches.js\n *\n * PURPOSE\n * Groups a document's segments into batches of roughly CHAR_BUDGET\n * characters and pre-renders the exact text the LLM will read, with\n * [SEG n] markers so the model can say which segment a clause came from.\n *\n * WHY BATCH AT ALL\n *   - One call per segment  = full coverage, but ~700 calls per run.\n *   - One call per document = 2 minutes, but long-context extraction\n *                             reliably misses clauses in the middle.\n *   - Batching              = full coverage, ~140 calls, markers keep\n *                             per-segment traceability.\n * Batching also repairs segmentation seams: a clause cut in half by the\n * 6000-char MAX_CHARS limit is invisible to either half alone, but\n * visible when both halves sit in the same batch.\n *\n * INPUT  (from \"Fetch Segments\"): one item per segment.\n * OUTPUT: one item per batch.\n */\n\n// ---------------------------------------------------------------\n// Config. Kept at the top, never buried in the logic below.\n// CHAR_BUDGET is characters, not tokens. Roughly 4 chars per token,\n// so 10000 chars is about 2500 tokens of contract per call - small\n// enough that the model attends to all of it.\n// ---------------------------------------------------------------\nconst CHAR_BUDGET = 10000;\n\nconst rows = items.map(i => i.json);\n\n// ---------------------------------------------------------------\n// Guard: \"Always Output Data\" is ON upstream, so a document with no\n// segments arrives here as a single empty item rather than nothing.\n// Detect it by absence of segment_text and return an explicit empty\n// batch list instead of building a nonsense batch.\n// ---------------------------------------------------------------\nconst realRows = rows.filter(r => r && r.segment_text);\n\nif (realRows.length === 0) {\n  return [{\n    json: {\n      document_id: $('When Executed by Another Workflow').first().json.document_id,\n      filename: null,\n      batch_no: 0,\n      batch_count: 0,\n      segment_count: 0,\n      batch_chars: 0,\n      segments: [],\n      batch_text: '',\n      is_empty: true,\n    },\n  }];\n}\n\n// document_id is not in the SELECT - the query filters on it rather\n// than returning it - so read it back from the trigger.\nconst documentId = Number(\n  $('When Executed by Another Workflow').first().json.document_id\n);\nconst filename = realRows[0].filename || null;\n\n// ---------------------------------------------------------------\n// Group segments until adding the next one would exceed the budget.\n//\n// The `current.length > 0` guard matters: a single segment larger\n// than CHAR_BUDGET must still go out, alone, in its own batch.\n// Without that check it would be skipped forever and the clauses\n// inside it would silently never be extracted - a missing-data bug\n// that looks exactly like poor model recall.\n// ---------------------------------------------------------------\nconst batches = [];\nlet current = [];\nlet currentChars = 0;\n\nfor (const row of realRows) {\n  const len = (row.segment_text || '').length;\n\n  if (current.length > 0 && currentChars + len > CHAR_BUDGET) {\n    batches.push(current);\n    current = [];\n    currentChars = 0;\n  }\n\n  current.push(row);\n  currentChars += len;\n}\n\nif (current.length > 0) {\n  batches.push(current);\n}\n\n// ---------------------------------------------------------------\n// Render each batch.\n//\n// The marker uses seq_no (1, 2, 3...) rather than the database\n// segment_id (large numbers). Short integers are far less likely to\n// be mis-transcribed by the model. The segments[] array carries the\n// seq_no -> segment_id mapping so a later node can resolve the real\n// foreign key without trusting the model with it.\n// ---------------------------------------------------------------\nreturn batches.map((batch, index) => {\n  const parts = batch.map(row => {\n    const heading = row.heading ? ` ${row.heading}` : '';\n    return `[SEG ${row.seq_no}]${heading}\\n${row.segment_text}`;\n  });\n\n  const segments = batch.map(row => ({\n    seq_no: Number(row.seq_no),\n    segment_id: Number(row.segment_id),   // BIGINT arrives as a string\n    char_start: Number(row.char_start),\n    char_end: Number(row.char_end),\n  }));\n\n  return {\n    json: {\n      document_id: documentId,\n      filename,\n      batch_no: index + 1,\n      batch_count: batches.length,\n      segment_count: batch.length,\n      batch_chars: parts.join('\\n\\n').length,\n      segments,\n      batch_text: parts.join('\\n\\n'),\n      is_empty: false,\n    },\n  };\n});\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        416,
+        0
+      ],
+      "id": "bf770aec-5471-4211-92cd-25574943bfc3",
+      "name": "Build Batches"
+    },
+    {
+      "parameters": {
+        "modelId": {
+          "__rl": true,
+          "value": "gpt-4o-mini",
+          "mode": "list",
+          "cachedResultName": "GPT-4O-MINI"
+        },
+        "responses": {
+          "values": [
+            {
+              "role": "system",
+              "content": "You are a contract analyst. You extract specific clause types from\ncommercial contracts and return structured JSON. You never guess.\n \nYou extract exactly these five clause types, and no others:\n \n1. \"Governing Law\"\n   The provision naming which jurisdiction's law governs the agreement.\n   Look for: governed by, construed in accordance with, laws of.\n   Do NOT confuse with venue, forum, or jurisdiction-for-disputes\n   clauses unless the same sentence also names the governing law.\n \n2. \"Termination For Convenience\"\n   A right for a party to terminate WITHOUT cause, typically on notice.\n   Look for: terminate for any reason, without cause, at its\n   convenience, upon N days written notice.\n   Termination for breach, default, or insolvency does NOT count.\n \n3. \"Cap On Liability\"\n   A ceiling limiting the amount one party can be liable for.\n   Look for: total liability shall not exceed, aggregate liability,\n   limited to the fees paid, maximum liability.\n   A pure exclusion of consequential damages, with no monetary or\n   formula-based ceiling, does NOT count.\n \n4. \"Renewal Term\"\n   Provision for the agreement to extend beyond its initial term.\n   Look for: automatically renew, successive periods, extended for\n   additional terms, evergreen, unless either party gives notice.\n   The initial term alone, with no extension mechanism, does NOT count.\n \n5. \"Anti-Assignment\"\n   A restriction on transferring or assigning the agreement or rights\n   under it, usually requiring the other party's consent.\n   Look for: shall not assign, may not transfer, without the prior\n   written consent, change of control.\n \nRULES\n \n- Report ONLY clauses that are explicitly present in the text given to\n  you. Never infer a clause from context or from what a contract of this\n  kind usually contains. A missing clause is a real and useful finding.\n- clause_text must be copied VERBATIM from the input, character for\n  character. Do not paraphrase, summarise, correct, or reformat it. If\n  the clause is long, quote the operative sentence or sentences, up to\n  roughly 600 characters.\n- seq_no must be the number from the [SEG n] marker that the quoted text\n  appeared under. If a clause spans two markers, use the one where the\n  operative language begins.\n- The same clause type may legitimately appear more than once. Report\n  each occurrence separately.\n- confidence is your own calibrated probability, 0.0 to 1.0, that this\n  extraction is correct and correctly typed. Use the full range. Reserve\n  above 0.9 for clauses with unmistakable standard wording. Use below\n  0.6 when the language is unusual, partial, or arguably a different\n  clause type.\n- If none of the five types appear in this text, return an empty list.\n  That is a valid and expected answer.\n \nOUTPUT\n \nReturn a single JSON object and nothing else. No markdown, no code\nfences, no commentary. Use exactly this shape:\n \n{\n  \"clauses\": [\n    {\n      \"clause_type\": \"Governing Law\",\n      \"seq_no\": 3,\n      \"clause_text\": \"This Agreement shall be governed by the laws of the State of Delaware.\",\n      \"confidence\": 0.95,\n      \"reasoning\": \"Explicit governing law language naming Delaware.\"\n    }\n  ]\n}\n \nclause_type must be spelled exactly as one of the five names above,\nincluding capitalisation. reasoning is one short sentence."
+            },
+            {
+              "content": "=Contract: {{ $json.filename }}\nBatch {{ $json.batch_no }} of {{ $json.batch_count }}\n \nExtract the five clause types from the contract text below and return\nJSON in the required shape.\n \n{{ $json.batch_text }}\n---------------------------------------------------------------\n \n \n===============================================================\nNOTES ON WHY THE PROMPT IS SHAPED THIS WAY\n \nNegative definitions carry most of the weight.\nEach clause type says what does NOT count. These are the specific\nconfusions CUAD annotators had to resolve, and they are where an\nunguided model loses precision: venue read as governing law, termination\nfor breach read as termination for convenience, a consequential-damages\nexclusion read as a liability cap. Telling the model what to reject is\nworth more than telling it what to accept.\n \nVerbatim text is a hard requirement, not a preference.\nPhase 4 scoring compares extracted text against CUAD gold spans. A\nparaphrase cannot be matched against a gold span, so a paraphrased\nclause scores as a miss even when the model found the right clause. It\nalso lets a later Code node locate the exact character offsets with\nindexOf, rather than trusting the model to report positions.\n \nAbsence is NOT decided here.\nThis call sees one batch, not the whole document, so it cannot know a\nclause type is missing document-wide. It only reports what it finds. A\nlater Code node compares the union of all batch results against the five\ntypes and writes the is_absent rows. Asking a single batch about absence\nwould produce a false \"absent\" for every batch that simply did not\nhappen to contain that clause.\n \nRisk is NOT scored here.\nThe model returns extraction plus confidence. risk_score and risk_level\nare computed deterministically in a later Code node from a policy config.\nDeterministic risk means the same clause always scores the same, which is\nwhat makes the number defensible in a report.\n \nTemperature 0.\nExtraction is not a creative task, and a reproducible evaluation number\nrequires that the same input produces the same output."
+            }
+          ]
+        },
+        "builtInTools": {},
+        "options": {
+          "textFormat": {
+            "textOptions": {
+              "type": "json_schema",
+              "name": "clause_extraction",
+              "schema": "{\n  \"type\": \"object\",\n  \"properties\": {\n    \"clauses\": {\n      \"type\": \"array\",\n      \"items\": {\n        \"type\": \"object\",\n        \"properties\": {\n          \"clause_type\": {\n            \"type\": \"string\",\n            \"enum\": [\n              \"Governing Law\",\n              \"Termination For Convenience\",\n              \"Cap On Liability\",\n              \"Renewal Term\",\n              \"Anti-Assignment\"\n            ]\n          },\n          \"seq_no\": { \"type\": \"integer\" },\n          \"clause_text\": { \"type\": \"string\" },\n          \"confidence\": { \"type\": \"number\" },\n          \"reasoning\": { \"type\": \"string\" }\n        },\n        \"required\": [\"clause_type\", \"seq_no\", \"clause_text\", \"confidence\", \"reasoning\"],\n        \"additionalProperties\": false\n      }\n    }\n  },\n  \"required\": [\"clauses\"],\n  \"additionalProperties\": false\n}",
+              "strict": true
+            }
+          },
+          "temperature": 0
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.openAi",
+      "typeVersion": 2.3,
+      "position": [
+        624,
+        0
+      ],
+      "id": "bd215e45-bc85-44b7-91d6-19ff1406c262",
+      "name": "Extract Clauses",
+      "credentials": {
+        "openAiApi": {
+          "id": "tqFr98mgXbyqjHSX",
+          "name": "OpenAI - Assign11"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "/**\n * WF3 - AI Risk Analysis\n * Node: \"Parse & Validate\"  (Code node, Mode = Run Once for All Items)\n *\n * Repo copy: workflows/code/wf3_parse_validate.js\n * Version 2 - segment resolution is now evidence-based.\n *\n * WHAT CHANGED FROM v1\n * v1 trusted the model's [SEG n] marker to identify the source segment.\n * On the first real run, 2 of 5 clauses cited a seq_no that was not in\n * their own batch, so segment_id and both character offsets came back\n * null. Batching buys speed at the cost of the model having to count\n * markers correctly, and it does not always manage it.\n *\n * v2 searches the batch's segments for the quoted text and uses\n * whichever segment actually contains it. The model's seq_no is only a\n * fallback hint. Traceability no longer depends on the model counting.\n *\n * OUTPUT: one item per clause row, ready for INSERT.\n */\n\nconst PROMPT_VERSION = 'v1';   // the PROMPT is unchanged; only this node moved\nconst MODEL = 'gpt-4o-mini';\n\nconst CLAUSE_TYPES = [\n  'Governing Law',\n  'Termination For Convenience',\n  'Cap On Liability',\n  'Renewal Term',\n  'Anti-Assignment',\n];\n\n/** Collapse whitespace so a line-wrap difference is not read as a mismatch. */\nconst norm = (s) => (s || '').replace(/\\s+/g, ' ').trim();\n\n// ---------------------------------------------------------------\n// Lookup: segment_id -> text and absolute offset in full_text.\n// Built from Fetch Segments, never from anything the model reported.\n// ---------------------------------------------------------------\nconst segmentById = new Map();\nfor (const row of $('Fetch Segments').all()) {\n  const s = row.json;\n  if (!s || !s.segment_text) continue;\n  segmentById.set(Number(s.segment_id), {\n    text: s.segment_text,\n    textNorm: norm(s.segment_text),\n    char_start: Number(s.char_start),\n    seq_no: Number(s.seq_no),\n  });\n}\n\nconst batches = $('Build Batches').all();\nconst documentId = Number(batches[0].json.document_id);\n\n/**\n * Response shape is output[0].content[0].text.clauses, where .text is an\n * OBJECT because JSON Schema mode already parsed it. The fallbacks cover\n * the other shapes n8n returns under different Simplify settings, so a\n * settings change cannot silently produce zero clauses.\n */\nfunction extractClauses(json) {\n  const candidates = [\n    json?.output?.[0]?.content?.[0]?.text,\n    json?.message?.content,\n    json?.content,\n    json,\n  ];\n\n  for (const c of candidates) {\n    if (!c) continue;\n    if (Array.isArray(c?.clauses)) return c.clauses;\n    if (typeof c === 'string') {\n      try {\n        const parsed = JSON.parse(c);\n        if (Array.isArray(parsed?.clauses)) return parsed.clauses;\n      } catch (e) { /* not JSON, try next candidate */ }\n    }\n  }\n  return [];\n}\n\n/**\n * Find which segment of this batch actually contains the quoted text.\n *\n * Order matters:\n *   1. Exact substring in the segment the model named. Cheapest, and\n *      correct whenever the model counted right.\n *   2. Exact substring in any other segment of the batch. Catches\n *      mis-attribution while still proving the quote is verbatim.\n *   3. Whitespace-normalised match anywhere in the batch. Proves the\n *      words are right even if line wrapping differs - but offsets\n *      cannot be trusted, so they are left null rather than guessed.\n *\n * Returning offsets we are not sure of would be worse than returning\n * none: Phase 4 error analysis would follow them to the wrong place.\n */\nfunction locate(clauseText, batchSegments, hintedSeqNo) {\n  const hinted = batchSegments.find(s => Number(s.seq_no) === Number(hintedSeqNo));\n  const ordered = hinted\n    ? [hinted, ...batchSegments.filter(s => s !== hinted)]\n    : batchSegments;\n\n  // Passes 1 and 2: exact substring.\n  for (const s of ordered) {\n    const seg = segmentById.get(Number(s.segment_id));\n    if (!seg) continue;\n    const idx = seg.text.indexOf(clauseText);\n    if (idx !== -1) {\n      return {\n        segment_id: Number(s.segment_id),\n        char_start: seg.char_start + idx,\n        char_end: seg.char_start + idx + clauseText.length,\n        verbatim_ok: true,\n        attribution: hinted && Number(s.segment_id) === Number(hinted.segment_id)\n          ? 'model'          // model named the right segment\n          : 'recovered',     // model was wrong, text search fixed it\n      };\n    }\n  }\n\n  // Pass 3: whitespace-tolerant.\n  const needle = norm(clauseText);\n  for (const s of ordered) {\n    const seg = segmentById.get(Number(s.segment_id));\n    if (!seg) continue;\n    if (seg.textNorm.includes(needle)) {\n      return {\n        segment_id: Number(s.segment_id),\n        char_start: null,\n        char_end: null,\n        verbatim_ok: true,\n        attribution: 'normalised',\n      };\n    }\n  }\n\n  // Nowhere in the batch: the model paraphrased despite instruction.\n  return {\n    segment_id: null,\n    char_start: null,\n    char_end: null,\n    verbatim_ok: false,\n    attribution: 'not_found',\n  };\n}\n\nconst rows = [];\nconst seen = new Set();\nconst foundTypes = new Set();\n\nitems.forEach((item, index) => {\n  const clauses = extractClauses(item.json);\n\n  // n8n preserves item order, so position links an LLM result back to\n  // the batch that produced it. The LLM output carries no batch_no.\n  const batch = batches[index]?.json;\n  if (!batch) return;\n\n  const batchSegments = batch.segments || [];\n\n  for (const c of clauses) {\n    const clauseType = (c.clause_type || '').trim();\n    const clauseText = (c.clause_text || '').trim();\n\n    // The JSON Schema enum should make both impossible. Checked anyway:\n    // a bad clause_type would fail the DB CHECK and abort the insert.\n    if (!CLAUSE_TYPES.includes(clauseType) || !clauseText) continue;\n\n    const key = `${clauseType}::${norm(clauseText)}`;\n    if (seen.has(key)) continue;\n    seen.add(key);\n\n    const found = locate(clauseText, batchSegments, c.seq_no);\n\n    let confidence = Number(c.confidence);\n    if (!Number.isFinite(confidence)) confidence = 0.5;\n    confidence = Math.min(1, Math.max(0, confidence));\n\n    foundTypes.add(clauseType);\n\n    rows.push({\n      json: {\n        document_id: documentId,\n        segment_id: found.segment_id,\n        clause_type: clauseType,\n        clause_text: clauseText,\n        char_start: found.char_start,\n        char_end: found.char_end,\n        confidence: Number(confidence.toFixed(3)),\n        is_absent: false,\n        reasoning: c.reasoning || null,\n        verbatim_ok: found.verbatim_ok,\n        attribution: found.attribution,   // model | recovered | normalised | not_found\n        model: MODEL,\n        prompt_version: PROMPT_VERSION,\n        batch_no: Number(batch.batch_no),\n      },\n    });\n  }\n});\n\n// ---------------------------------------------------------------\n// Absence rows.\n//\n// Decided here because this node is the first point that has seen\n// every batch, so it can tell \"not in this batch\" from \"not in this\n// document\". Without these rows, \"the model said no\" and \"WF3 crashed\n// early\" are indistinguishable in the database, which silently\n// inflates false negatives in the Phase 4 recall figure.\n// ---------------------------------------------------------------\nfor (const type of CLAUSE_TYPES) {\n  if (foundTypes.has(type)) continue;\n  rows.push({\n    json: {\n      document_id: documentId,\n      segment_id: null,\n      clause_type: type,\n      clause_text: null,       // DB CHECK requires NULL when is_absent\n      char_start: null,\n      char_end: null,\n      confidence: null,\n      is_absent: true,\n      reasoning: 'Not found in any batch of this document.',\n      verbatim_ok: true,\n      attribution: 'absent',\n      model: MODEL,\n      prompt_version: PROMPT_VERSION,\n      batch_no: null,\n    },\n  });\n}\n\nreturn rows;\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        976,
+        0
+      ],
+      "id": "b9ee7947-b2d9-4a92-8790-d7c483743deb",
+      "name": "Parse & Validate"
+    },
+    {
+      "parameters": {
+        "jsCode": "/**\n * WF3 - AI Risk Analysis\n * Node: \"Score Risk\"  (Code node, Mode = Run Once for All Items)\n *\n * Repo copy: workflows/code/wf3_score_risk.js\n *\n * Turns each extracted clause into a risk_score (0..1) and a\n * risk_level, and decides whether it needs a human.\n *\n * WHY THIS IS RULES AND NOT ANOTHER LLM CALL\n * Ask a model to score risk and the same clause scores 0.6 today and\n * 0.75 next week, with no explanation for either. A rules table gives a\n * number that can be defended - \"an absent liability cap scores 0.90\n * because the policy config says so\" - and makes WF6's aggregates\n * comparable across runs. It is also free and instant.\n *\n * The scores below are a starting policy, not received wisdom. They are\n * in one block at the top precisely so they can be argued with and\n * changed without touching the logic.\n */\n\n// ===============================================================\n// POLICY CONFIG\n// ===============================================================\n\n/**\n * BASE_RISK - inherent risk of each clause type when present and normal.\n * Governing Law is low: unfavourable law is inconvenient, not dangerous.\n * Cap On Liability is higher because the amount matters enormously.\n */\nconst BASE_RISK = {\n  'Governing Law': 0.20,\n  'Termination For Convenience': 0.50,\n  'Cap On Liability': 0.55,\n  'Renewal Term': 0.40,\n  'Anti-Assignment': 0.35,\n};\n\n/**\n * ABSENT_RISK - risk when the clause type is MISSING from the contract.\n *\n * Absence is not the same as low risk, and for some types it is worse\n * than presence. No liability cap means unlimited exposure. No\n * anti-assignment clause means the counterparty can hand the contract\n * to a competitor. A missing governing law clause, by contrast, is a\n * gap the law itself will fill.\n *\n * This asymmetry is the whole reason is_absent rows exist.\n */\nconst ABSENT_RISK = {\n  'Governing Law': 0.30,\n  'Termination For Convenience': 0.25,\n  'Cap On Liability': 0.90,\n  'Renewal Term': 0.45,\n  'Anti-Assignment': 0.60,\n};\n\n/**\n * MODIFIERS - textual signals that adjust the base score.\n * Applied only to clauses that are present. Cumulative, then clamped.\n */\nconst MODIFIERS = [\n  // Automatic renewal with a short objection window is a classic trap.\n  { types: ['Renewal Term'], pattern: /automatic(ally)?\\s+renew/i, delta: +0.20,\n    note: 'auto-renews' },\n  { types: ['Renewal Term'], pattern: /\\b(thirty|30)\\s*\\(?30?\\)?\\s*days?\\b/i, delta: +0.10,\n    note: 'short notice window' },\n\n  // Unlimited or carved-out liability.\n  { types: ['Cap On Liability'], pattern: /unlimited|no\\s+limit|shall\\s+not\\s+be\\s+limited/i,\n    delta: +0.30, note: 'liability not truly capped' },\n  { types: ['Cap On Liability'], pattern: /fees\\s+paid|amounts?\\s+paid/i, delta: -0.15,\n    note: 'capped at fees paid' },\n\n  // One-sided termination.\n  { types: ['Termination For Convenience'], pattern: /sole\\s+discretion/i, delta: +0.15,\n    note: 'sole discretion' },\n  { types: ['Termination For Convenience'], pattern: /immediately|without\\s+notice/i,\n    delta: +0.20, note: 'no notice period' },\n\n  // Assignment restrictions that bite on ordinary corporate events.\n  { types: ['Anti-Assignment'], pattern: /change\\s+of\\s+control/i, delta: +0.20,\n    note: 'change of control triggers' },\n  { types: ['Anti-Assignment'], pattern: /not\\s+be\\s+unreasonably\\s+withheld/i, delta: -0.15,\n    note: 'consent not unreasonably withheld' },\n];\n\n/** Score bands. risk_level must match the DB CHECK in migration 003. */\nconst RISK_BANDS = [\n  { max: 0.35, level: 'low' },\n  { max: 0.60, level: 'medium' },\n  { max: 0.85, level: 'high' },\n  { max: 1.01, level: 'critical' },\n];\n\n/**\n * CONFIDENCE_THRESHOLD - below this, a human reviews it (WF4).\n *\n * 0.70 is a placeholder. The project plan says tau is decided\n * empirically in Phase 2 from the DEV set only. Do not tune this\n * against holdout data - that would make the final number self-graded.\n */\nconst CONFIDENCE_THRESHOLD = 0.70;\n\n// ===============================================================\n// LOGIC\n// ===============================================================\n\nconst clamp = (n) => Math.min(1, Math.max(0, n));\n\nfunction bandFor(score) {\n  for (const b of RISK_BANDS) {\n    if (score < b.max) return b.level;\n  }\n  return 'critical';\n}\n\nreturn items.map((item) => {\n  const c = item.json;\n  const type = c.clause_type;\n\n  let score;\n  const notes = [];\n\n  if (c.is_absent) {\n    score = ABSENT_RISK[type] ?? 0.50;\n    notes.push('clause absent');\n  } else {\n    score = BASE_RISK[type] ?? 0.50;\n\n    const text = c.clause_text || '';\n    for (const mod of MODIFIERS) {\n      if (!mod.types.includes(type)) continue;\n      if (mod.pattern.test(text)) {\n        score += mod.delta;\n        notes.push(mod.note);\n      }\n    }\n\n    // A shaky extraction is itself a risk: if the model is unsure it\n    // read the clause correctly, the clause deserves more attention,\n    // not less. Small nudge only - confidence is reported separately\n    // and should not be double-counted into the risk figure.\n    if (Number(c.confidence) < 0.60) {\n      score += 0.05;\n      notes.push('low extraction confidence');\n    }\n  }\n\n  score = clamp(score);\n\n  // Absent clauses have NULL confidence, so they cannot be compared\n  // against the threshold. They are routed for review on their own\n  // merit: a missing high-risk clause is exactly what a lawyer should\n  // be told about.\n  const needsReview = c.is_absent\n    ? score >= 0.60\n    : Number(c.confidence) < CONFIDENCE_THRESHOLD;\n\n  return {\n    json: {\n      ...c,\n      risk_score: Number(score.toFixed(3)),\n      risk_level: bandFor(score),\n      risk_notes: notes.join('; ') || null,\n      needs_review: needsReview,\n      review_status: needsReview ? 'pending_review' : 'auto',\n      confidence_threshold: CONFIDENCE_THRESHOLD,\n    },\n  };\n});\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1184,
+        0
+      ],
+      "id": "c1ee2f6b-fe53-4f72-89b5-06a4e5558d88",
+      "name": "Score Risk"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "DELETE FROM clauses\nWHERE document_id = $1\n  AND review_status = 'auto';",
+        "options": {
+          "queryReplacement": "={{ [Number($json.document_id)] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "position": [
+        1392,
+        0
+      ],
+      "id": "8adf8e42-0716-41b3-9c84-4621dc7cf81a",
+      "name": "Delete Old Clauses",
+      "executeOnce": true,
+      "alwaysOutputData": true,
+      "credentials": {
+        "postgres": {
+          "id": "K6Aq0yB2ZPCqoQiA",
+          "name": "Supabase Postgres - Assign11"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "/**\n * WF3 - Node: \"Restore Rows\" (Code, Run Once for All Items)\n * Repo copy: workflows/code/wf3_restore_rows.js\n *\n * A Postgres node REPLACES its input with its own result. \"Delete Old\n * Clauses\" returns nothing, so without this node the five scored clause\n * rows would be gone and the INSERT below would have nothing to write.\n *\n * This reaches back past the Postgres node and picks the rows up again.\n *\n * It also pre-builds the parameter array for the INSERT. Building it\n * here rather than as a 14-item expression in the n8n UI keeps the\n * ordering readable and reviewable - a misplaced comma in that field is\n * very hard to spot and would silently write values into wrong columns.\n */\n\nreturn $('Score Risk').all().map((row) => {\n  const c = row.json;\n\n  // Metadata that has no dedicated column lives in extracted_fields.\n  // JSONB is why this can evolve without another migration.\n  const extracted = {\n    reasoning: c.reasoning,\n    risk_notes: c.risk_notes,\n    attribution: c.attribution,\n    verbatim_ok: c.verbatim_ok,\n    batch_no: c.batch_no,\n    confidence_threshold: c.confidence_threshold,\n  };\n\n  return {\n    json: {\n      ...c,\n      params: [\n        c.document_id,\n        c.segment_id,\n        c.clause_type,\n        c.clause_text,\n        c.char_start,\n        c.char_end,\n        c.confidence,\n        c.review_status,\n        c.is_absent,\n        c.risk_score,\n        c.risk_level,\n        c.model,\n        c.prompt_version,\n        JSON.stringify(extracted),\n      ],\n    },\n  };\n});"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1600,
+        0
+      ],
+      "id": "2dd24136-f894-48e5-942c-6c2089ec4d6f",
+      "name": "Restore Rows"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO clauses (\n    document_id, segment_id, clause_type, clause_text,\n    char_start, char_end, confidence, review_status,\n    is_absent, risk_score, risk_level,\n    model, prompt_version, extracted_fields, extracted_at\n) VALUES (\n    $1, $2, $3, $4,\n    $5, $6, $7, $8,\n    $9, $10, $11,\n    $12, $13, $14::jsonb, NOW()\n)\nRETURNING id, clause_type, risk_level, review_status, is_absent;",
+        "options": {
+          "queryReplacement": "={{ $json.params }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "position": [
+        1808,
+        0
+      ],
+      "id": "6019e0e8-b9ce-4718-9e21-a1ecfc055150",
+      "name": "Insert Clauses",
+      "credentials": {
+        "postgres": {
+          "id": "K6Aq0yB2ZPCqoQiA",
+          "name": "Supabase Postgres - Assign11"
+        }
+      },
+      "onError": "continueErrorOutput"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "When Executed by Another Workflow": {
+      "main": [
+        [
+          {
+            "node": "Fetch Segments",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Segments": {
+      "main": [
+        [
+          {
+            "node": "Build Batches",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Batches": {
+      "main": [
+        [
+          {
+            "node": "Extract Clauses",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract Clauses": {
+      "main": [
+        [
+          {
+            "node": "Parse & Validate",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse & Validate": {
+      "main": [
+        [
+          {
+            "node": "Score Risk",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Score Risk": {
+      "main": [
+        [
+          {
+            "node": "Delete Old Clauses",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Delete Old Clauses": {
+      "main": [
+        [
+          {
+            "node": "Restore Rows",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Restore Rows": {
+      "main": [
+        [
+          {
+            "node": "Insert Clauses",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "availableInMCP": false
+  },
+  "versionId": "b2bac3fd-15d5-4b0f-bf2f-4c51c2b73022",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "0031f5595dbe624837214def158854fa79038e53274f4301c3ad8528756175ac"
+  },
+  "nodeGroups": [],
+  "id": "MzNkVp7eq3NHaU2F",
+  "tags": []
+}
