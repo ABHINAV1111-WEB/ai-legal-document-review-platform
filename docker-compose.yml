@@ -34,6 +34,21 @@ services:
       # and a "9am" reminder fires at 2:30pm India time.
       - GENERIC_TIMEZONE=Asia/Kolkata
       - TZ=Asia/Kolkata
+      # --- WF4 review routing ----------------------------------
+      # Who receives clause review requests. Never hardcoded in a
+      # node - a different deployment reviews with a different lawyer.
+      - REVIEW_EMAIL=${REVIEW_EMAIL}
+      # n8n blocks $env inside expressions by default, so a leaked
+      # workflow JSON cannot exfiltrate host secrets. We opt in
+      # deliberately: WF4 reads REVIEW_EMAIL this way so the
+      # reviewer's address lives in .env and never inside a node.
+      # Safe here because n8n is single-tenant and locally hosted.
+      - N8N_BLOCK_ENV_ACCESS_IN_NODE=false
+
+      # Base URL n8n uses to build $execution.resumeUrl for the
+      # Wait node. Without this n8n guesses, and a wrong guess means
+      # the decision links in the email point nowhere.
+      - WEBHOOK_URL=${WEBHOOK_URL}
 
       # --- Local access ----------------------------------------
       # n8n insists on HTTPS cookies unless told otherwise. This is
