@@ -1,0 +1,230 @@
+{
+  "name": "WF5 - Renewal & Deadline Monitor",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "triggerAtHour": 9
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.4,
+      "position": [
+        0,
+        0
+      ],
+      "id": "07b8ac0e-445c-4781-babb-fa22fe7b9597",
+      "name": "Schedule Trigger"
+    },
+    {
+      "parameters": {
+        "mode": "raw",
+        "jsonOutput": "{\n  \"windows\": {\n    \"upcoming\": 30,\n    \"soon\": 14,\n    \"urgent\": 7\n  },\n  \"review_email\": \"jok6557@gmail.com\"\n}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.5,
+      "position": [
+        224,
+        0
+      ],
+      "id": "020cf4ff-1bca-4650-afe9-5c0e11300cec",
+      "name": "Config - Notification Windows"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT\n    o.id                        AS obligation_id,\n    o.document_id,\n    o.clause_id,\n    o.obligation_type,\n    o.date_source,\n    o.due_date,\n    o.notify_days_before,\n    (o.due_date - CURRENT_DATE) AS days_until_due,\n    CASE\n        WHEN (o.due_date - CURRENT_DATE) <= $3::int THEN 'urgent'\n        WHEN (o.due_date - CURRENT_DATE) <= $2::int THEN 'soon'\n        ELSE 'upcoming'\n    END                         AS urgency,\n    d.filename,\n    c.clause_type\nFROM obligations o\nJOIN documents d  ON d.id = o.document_id\nLEFT JOIN clauses c ON c.id = o.clause_id\nWHERE o.status = 'open'\n  AND o.notified_at IS NULL\n  AND o.due_date IS NOT NULL\n  AND o.due_date >= CURRENT_DATE\n  AND (o.due_date - CURRENT_DATE) <= LEAST($1::int, o.notify_days_before)\nORDER BY o.due_date ASC, o.id ASC;",
+        "options": {
+          "queryReplacement": "={{ [$json.windows.upcoming, $json.windows.soon, $json.windows.urgent] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "position": [
+        400,
+        0
+      ],
+      "id": "b9042e44-b747-41e7-bb3c-8c32b2190eb5",
+      "name": "Find Due Obligations",
+      "credentials": {
+        "postgres": {
+          "id": "uy86ek4B01YIClqb",
+          "name": "Supabase Postgres - Assign11"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        624,
+        0
+      ],
+      "id": "20939009-a508-480b-ae24-0874aa15afe4",
+      "name": "Loop Over Items"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "// ===============================================================\n// WF5 - Renewal & Deadline Monitor\n// Node: \"Build Reminder\"  (Code -> Run Once for Each Item)\n//\n// Repo copy: workflows/code/wf5_build_reminder.js\n//\n// Input : one row from \"Find Due Obligations\", via Loop Over Items\n// Output: one item shaped for the \"Queue Reminder\" Postgres INSERT\n//         into email_outbox, plus obligation_id for \"Mark Notified\".\n//\n// SCOPE HONESTY: the body text says out loud that this is an\n// INTERNAL review deadline, not a contractual renewal date. WF3's\n// extraction schema returns no dates, so none exist in the DB.\n// The email must not imply otherwise.\n// ===============================================================\n\nconst o = $json;\n\n// ---------------------------------------------------------------\n// Recipient. Never hardcoded here. Resolution order:\n//   1. n8n Variable REVIEW_EMAIL  (Settings -> Variables; Enterprise\n//      tier only, so unavailable on this instance)\n//   2. review_email on the \"Config - Notification Windows\" node\n//\n// $env is deliberately NOT used: n8n Cloud blocks environment\n// access at the platform level and it cannot be re-enabled without\n// a docker-compose file. Keeping the $vars branch means this\n// workflow runs unchanged on a self-hosted or paid instance.\n//\n// Fail loudly on a blank address: a reminder with no recipient is\n// worse than an error, because it lands in email_outbox looking\n// like it worked.\n// ---------------------------------------------------------------\nconst varsEmail =\n  typeof $vars !== 'undefined' && $vars ? $vars.REVIEW_EMAIL : null;\nconst configEmail = $('Config - Notification Windows').first().json.review_email;\n\nconst toAddress = String(varsEmail || configEmail || '').trim();\nif (!toAddress) {\n  throw new Error(\n    'REVIEW_EMAIL not resolved. Set the n8n Variable REVIEW_EMAIL, ' +\n      'or set review_email on the \"Config - Notification Windows\" node.'\n  );\n}\n\n// ---------------------------------------------------------------\n// Policy windows, pulled from the config node so the email can\n// state the policy it is operating under. Not re-derived here.\n// ---------------------------------------------------------------\nconst windows = $('Config - Notification Windows').first().json.windows;\n\n// ---------------------------------------------------------------\n// Postgres returns BIGINT as a STRING (known bug #3). Cast the\n// values used in arithmetic or comparison; leave the id values as\n// strings, Postgres casts them back on INSERT.\n// ---------------------------------------------------------------\nconst daysUntil = Number(o.days_until_due);\nconst urgency = String(o.urgency || 'upcoming');\n\nconst LABEL = {\n  urgent: 'URGENT',\n  soon: 'Action needed',\n  upcoming: 'Upcoming',\n};\nconst label = LABEL[urgency] || 'Upcoming';\n\n// CUAD filenames are extremely long. Keep the subject line readable\n// but keep the FULL filename in the body so the document is\n// unambiguous.\nconst fullName = String(o.filename || 'unknown document');\nconst shortName =\n  fullName.length > 60 ? fullName.slice(0, 57) + '...' : fullName;\n\nconst dayWord = daysUntil === 1 ? 'day' : 'days';\nconst subject = `[${label}] Review due in ${daysUntil} ${dayWord} - ${shortName}`;\n\n// clause_id is ON DELETE SET NULL, so the LEFT JOIN can yield nulls.\nconst clauseLine =\n  o.clause_id === null || o.clause_id === undefined\n    ? 'not linked (clause row removed)'\n    : `${o.clause_type || 'unknown type'} (clause id ${o.clause_id})`;\n\nconst bodyText = [\n  'Automated reminder - AI Legal Document Review & Compliance Platform',\n  '',\n  'A scheduled review deadline is approaching.',\n  '',\n  `  Document        : ${fullName}`,\n  `  Document ID     : ${o.document_id}`,\n  `  Clause          : ${clauseLine}`,\n  `  Obligation      : ${o.obligation_type} (id ${o.obligation_id})`,\n  `  Due date        : ${o.due_date}`,\n  `  Days remaining  : ${daysUntil}`,\n  `  Urgency         : ${urgency}`,\n  '',\n  'WHAT THIS IS',\n  '  An INTERNAL review deadline generated on a fixed schedule',\n  `  (date_source = ${o.date_source}). It is NOT a contractual renewal`,\n  '  or notice date read out of the contract text - the extraction',\n  '  pipeline does not currently capture contractual dates.',\n  '',\n  'WHAT TO DO',\n  '  Re-read the Renewal Term clause for this document and confirm',\n  '  the renewal and notice position before the due date above.',\n  '',\n  'POLICY',\n  `  Notification windows: ${windows.upcoming} / ${windows.soon} / ${windows.urgent} days before due date.`,\n  '  Each obligation is notified exactly once.',\n  '',\n  '-- WF5 - Renewal & Deadline Monitor',\n].join('\\n');\n\n// ---------------------------------------------------------------\n// params[] is consumed directly by \"Queue Reminder\" as\n//   {{ $json.params }}   (bare - known bug #2 exception)\n// Order must match the INSERT column order exactly:\n//   purpose, obligation_id, document_id, to_address, subject, body_text\n// obligation_id backs the partial unique index added in migration\n// 007, which is what makes ON CONFLICT DO NOTHING able to swallow\n// a duplicate queue attempt after a mid-loop crash.\n// ---------------------------------------------------------------\nreturn {\n  json: {\n    obligation_id: o.obligation_id,\n    document_id: o.document_id,\n    purpose: 'renewal_reminder',\n    to_address: toAddress,\n    subject,\n    body_text: bodyText,\n    urgency,\n    days_until_due: daysUntil,\n    params: [\n      'renewal_reminder',\n      o.obligation_id,\n      o.document_id,\n      toAddress,\n      subject,\n      bodyText,\n    ],\n  },\n};\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        848,
+        208
+      ],
+      "id": "44aa64c4-a1f2-4266-819a-10ce7d6ade36",
+      "name": "Build Reminder"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO email_outbox\n    (purpose, obligation_id, document_id, to_address, subject, body_text, status)\nVALUES\n    ($1, $2::bigint, $3::bigint, $4, $5, $6, 'queued')\nON CONFLICT DO NOTHING\nRETURNING id AS outbox_id, obligation_id;",
+        "options": {
+          "queryReplacement": "={{ $json.params }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "position": [
+        1072,
+        208
+      ],
+      "id": "b185337c-7cd4-42b9-bfcd-de4b3c950511",
+      "name": "Queue Reminder",
+      "alwaysOutputData": true,
+      "credentials": {
+        "postgres": {
+          "id": "uy86ek4B01YIClqb",
+          "name": "Supabase Postgres - Assign11"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE obligations\nSET notified_at = NOW(),\n    status      = 'notified'\nWHERE id = $1::bigint\n  AND notified_at IS NULL\nRETURNING id AS obligation_id, notified_at, status;",
+        "options": {
+          "queryReplacement": "={{ [$('Build Reminder').item.json.obligation_id] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "position": [
+        1296,
+        208
+      ],
+      "id": "edd1e4be-8b17-46b5-a66c-19f5db0bcc0a",
+      "name": "Mark Notified",
+      "credentials": {
+        "postgres": {
+          "id": "uy86ek4B01YIClqb",
+          "name": "Supabase Postgres - Assign11"
+        }
+      }
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Schedule Trigger": {
+      "main": [
+        [
+          {
+            "node": "Config - Notification Windows",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Config - Notification Windows": {
+      "main": [
+        [
+          {
+            "node": "Find Due Obligations",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Find Due Obligations": {
+      "main": [
+        [
+          {
+            "node": "Loop Over Items",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Loop Over Items": {
+      "main": [
+        [],
+        [
+          {
+            "node": "Build Reminder",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Reminder": {
+      "main": [
+        [
+          {
+            "node": "Queue Reminder",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Queue Reminder": {
+      "main": [
+        [
+          {
+            "node": "Mark Notified",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Mark Notified": {
+      "main": [
+        [
+          {
+            "node": "Loop Over Items",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "versionId": "6f6d94bd-9e1d-40a5-b18f-a33d3437dccc",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "00ec46f575545dfe330c73be775bf8761a159777badf0b97830faa35551d0bb2"
+  },
+  "nodeGroups": [],
+  "id": "M0WZR48WX6ABAG6X",
+  "tags": []
+}
