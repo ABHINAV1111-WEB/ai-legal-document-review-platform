@@ -1,0 +1,276 @@
+{
+  "name": "WF6 - Audit Log & Dashboard",
+  "nodes": [
+    {
+      "parameters": {
+        "workflowInputs": {
+          "values": [
+            {
+              "name": "workflow_name"
+            },
+            {
+              "name": "event_type"
+            },
+            {
+              "name": "document_id",
+              "type": "number"
+            },
+            {
+              "name": "payload",
+              "type": "object"
+            },
+            {
+              "name": "actor"
+            },
+            {
+              "name": "execution_id"
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        0
+      ],
+      "id": "f5d00318-0f8e-4277-86a9-30a9150578bb",
+      "name": "When Executed by Another Workflow"
+    },
+    {
+      "parameters": {
+        "jsCode": "/**\n * WF6 - Audit Log & Dashboard\n * Node: Normalise Audit Event   (Code node, \"Run Once for All Items\")\n *\n * In  : items from \"When Executed by Another Workflow\"\n *       (workflow_name, event_type, document_id, payload, actor, execution_id)\n * Out : one item per input item, each carrying a 6-element `params` array\n *       for the \"Append Audit Event\" Postgres node.\n */\n\nconst out = [];\n\nfor (const item of $input.all()) {\n  const src = item.json ?? {};\n\n  // --- workflow_name : REQUIRED -------------------------------------\n  const workflowName = String(src.workflow_name ?? '').trim();\n  if (!workflowName) {\n    throw new Error(\n      'Audit event rejected: workflow_name is empty. ' +\n      'Caller must send e.g. \"WF1 - Ingestion & Storage\".'\n    );\n  }\n\n  // --- event_type : REQUIRED, forced to lower_snake_case -------------\n  // Callers will not be consistent. Normalising here keeps the\n  // WF6 weekly GROUP BY from splitting one event across three spellings.\n  const eventType = String(src.event_type ?? '')\n    .trim()\n    .toLowerCase()\n    .replace(/\\s+/g, '_');\n  if (!eventType) {\n    throw new Error(\n      `Audit event rejected: event_type is empty (workflow_name=\"${workflowName}\").`\n    );\n  }\n\n  // --- document_id : optional, BIGINT or NULL ------------------------\n  // Postgres hands BIGINT back as a string (bug #3), so a caller\n  // forwarding a DB value sends \"4\", not 4. Accept both.\n  let documentId = null;\n  const rawId = src.document_id;\n  if (rawId !== null && rawId !== undefined && rawId !== '') {\n    const n = Number(rawId);\n    documentId = Number.isFinite(n) && n > 0 ? String(Math.trunc(n)) : null;\n  }\n\n  // --- payload : always a JSON object, never null --------------------\n  let payload = src.payload;\n  if (typeof payload === 'string') {\n    try { payload = JSON.parse(payload); } catch (e) { payload = { raw: payload }; }\n  }\n  if (payload === null || payload === undefined) payload = {};\n  if (Array.isArray(payload) || typeof payload !== 'object') payload = { value: payload };\n\n  // Cap the size. A caller that accidentally forwards full contract text\n  // would otherwise push megabytes into an append-only table.\n  let payloadJson = JSON.stringify(payload);\n  if (payloadJson.length > 8000) {\n    payloadJson = JSON.stringify({\n      truncated: true,\n      original_chars: payloadJson.length,\n      preview: payloadJson.slice(0, 2000),\n    });\n  }\n\n  // --- actor : schema default is 'system' ----------------------------\n  const actor = String(src.actor ?? '').trim() || 'system';\n\n  // --- execution_id : optional ---------------------------------------\n  const executionId = String(src.execution_id ?? '').trim() || null;\n\n  out.push({\n    json: {\n      // readable copies, for debugging the canvas\n      workflow_name: workflowName,\n      event_type: eventType,\n      document_id: documentId,\n      actor,\n      execution_id: executionId,\n      payload,\n\n      // the only field the Postgres node reads\n      params: [\n        workflowName,\n        executionId,\n        documentId,\n        eventType,\n        payloadJson,\n        actor,\n      ],\n    },\n  });\n}\n\nreturn out;"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        224,
+        0
+      ],
+      "id": "2a0f2d9c-0740-4e17-8eee-438d09d2e60a",
+      "name": "Normalise Audit Event"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO audit_log (workflow_name, execution_id, document_id, event_type, payload, actor)\nVALUES ($1, $2, $3::bigint, $4, $5::jsonb, $6)\nRETURNING id, workflow_name, event_type, document_id, created_at;",
+        "options": {
+          "queryReplacement": "={{ $json.params }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "position": [
+        448,
+        0
+      ],
+      "id": "857fa6d5-edff-4ca9-8a8f-0d9464cc249a",
+      "name": "Append Audit Event",
+      "credentials": {
+        "postgres": {
+          "id": "uy86ek4B01YIClqb",
+          "name": "Supabase Postgres - Assign11"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "weeks",
+              "triggerAtDay": [
+                1
+              ],
+              "triggerAtHour": 9
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.4,
+      "position": [
+        16,
+        224
+      ],
+      "id": "b4b423d8-90ea-4cb5-8e0f-649caae9e48b",
+      "name": "Weekly Digest Trigger"
+    },
+    {
+      "parameters": {
+        "mode": "raw",
+        "jsonOutput": "{\n  \"review_email\": \"jok6557@gmail.com\",\n  \"lookback_days\": 7,\n  \"digest_subject_prefix\": \"[Assign11] Weekly audit digest\"\n}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.5,
+      "position": [
+        240,
+        224
+      ],
+      "id": "3b440eee-0c02-4a5b-aead-a0bbaa7009d4",
+      "name": "Config - Digest Settings"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT $1::int AS lookback_days, (NOW() - make_interval(days => $1::int)) AS window_start, NOW() AS window_end, COALESCE((SELECT json_agg(t ORDER BY t.workflow_name, t.event_type) FROM (SELECT workflow_name, event_type, COUNT(*)::int AS n FROM audit_log WHERE created_at >= NOW() - make_interval(days => $1::int) GROUP BY workflow_name, event_type) t), '[]'::json) AS audit_events, COALESCE((SELECT json_agg(t ORDER BY t.review_status) FROM (SELECT review_status, COUNT(*)::int AS n FROM clauses GROUP BY review_status) t), '[]'::json) AS clause_review, COALESCE((SELECT json_agg(t ORDER BY t.status) FROM (SELECT status, COUNT(*)::int AS n FROM documents GROUP BY status) t), '[]'::json) AS document_status, COALESCE((SELECT json_agg(t ORDER BY t.purpose, t.status) FROM (SELECT purpose, status, COUNT(*)::int AS n FROM email_outbox WHERE created_at >= NOW() - make_interval(days => $1::int) GROUP BY purpose, status) t), '[]'::json) AS outbox_activity, (SELECT COUNT(*)::int FROM audit_log WHERE created_at >= NOW() - make_interval(days => $1::int)) AS audit_rows_in_window, (SELECT COUNT(*)::int FROM documents WHERE uploaded_at >= NOW() - make_interval(days => $1::int)) AS documents_ingested, (SELECT COUNT(*)::int FROM clauses WHERE review_status = 'pending_review') AS clauses_awaiting_review, (SELECT COUNT(*)::int FROM obligations WHERE status = 'open' AND notified_at IS NULL) AS obligations_unnotified, (SELECT COUNT(*)::int FROM email_outbox WHERE status = 'queued') AS outbox_queued_total;",
+        "options": {
+          "queryReplacement": "={{ [$json.lookback_days] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "position": [
+        464,
+        224
+      ],
+      "id": "682478f5-9406-458d-979d-d06ef9fe881d",
+      "name": "Aggregate Stats",
+      "credentials": {
+        "postgres": {
+          "id": "uy86ek4B01YIClqb",
+          "name": "Supabase Postgres - Assign11"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "/**\n * WF6 - Audit Log & Dashboard\n * Node: Build Digest   (Code node, \"Run Once for All Items\")\n *\n * In  : one item from \"Aggregate Stats\"\n * Out : one item carrying subject, body_text and a 5-element\n *       `params` array for the \"Queue Digest\" Postgres node.\n *\n * Address resolution keeps the $vars branch first so this workflow\n * runs unchanged on a self-hosted instance, where $vars exists.\n * On n8n Cloud $vars is Enterprise-only, so the config node wins.\n */\n\nconst stats = $input.first().json;\nconst cfg = $('Config - Digest Settings').first().json;\n\n// --- recipient ------------------------------------------------------\nconst varsEmail =\n  typeof $vars !== 'undefined' && $vars ? $vars.REVIEW_EMAIL : null;\nconst toAddress = String(varsEmail || cfg.review_email || '').trim();\nif (!toAddress) {\n  throw new Error(\n    'REVIEW_EMAIL not resolved. Set review_email in \"Config - Digest Settings\", ' +\n    'or REVIEW_EMAIL as an n8n Variable on a self-hosted instance.'\n  );\n}\n\n// --- helpers --------------------------------------------------------\nconst n = (v) => Number(v ?? 0);\nconst asArray = (v) => (Array.isArray(v) ? v : []);\nconst dateOnly = (iso) => String(iso ?? '').slice(0, 10);\n\n// Renders [{a:'x', n:3}] as \"  x .......... 3\"\nconst table = (rows, keys, emptyText) => {\n  if (!rows.length) return `  (${emptyText})`;\n  const label = (r) => keys.map((k) => r[k]).join(' / ');\n  const width = Math.max(...rows.map((r) => label(r).length));\n  return rows\n    .map((r) => `  ${label(r).padEnd(width, ' ')}   ${String(n(r.n)).padStart(5, ' ')}`)\n    .join('\\n');\n};\n\n// --- pull the sections ----------------------------------------------\nconst auditEvents = asArray(stats.audit_events);\nconst clauseReview = asArray(stats.clause_review);\nconst documentStatus = asArray(stats.document_status);\nconst outboxActivity = asArray(stats.outbox_activity);\n\nconst lookbackDays = n(stats.lookback_days);\nconst windowStart = dateOnly(stats.window_start);\nconst windowEnd = dateOnly(stats.window_end);\n\nconst auditRows = n(stats.audit_rows_in_window);\nconst docsIngested = n(stats.documents_ingested);\nconst awaitingReview = n(stats.clauses_awaiting_review);\nconst unnotified = n(stats.obligations_unnotified);\nconst outboxQueued = n(stats.outbox_queued_total);\n\n// --- things a human should act on -----------------------------------\nconst attention = [];\nif (awaitingReview > 0) {\n  attention.push(\n    `${awaitingReview} clause(s) are sitting in pending_review and are blocking WF4.`\n  );\n}\nif (outboxQueued > 0) {\n  attention.push(\n    `${outboxQueued} email(s) are queued but unsent. No mail provider is configured ` +\n    `yet, so this is expected until a Gmail credential is added.`\n  );\n}\nif (auditRows === 0) {\n  attention.push(\n    `No audit events were recorded in the last ${lookbackDays} day(s). ` +\n    `Either the pipeline was idle, or a workflow is not calling WF6.`\n  );\n}\nif (unnotified > 0) {\n  attention.push(\n    `${unnotified} open obligation(s) have not been notified. ` +\n    `Expected if their due dates are outside the notification window.`\n  );\n}\n\nconst attentionBlock = attention.length\n  ? attention.map((line, i) => `  ${i + 1}. ${line}`).join('\\n')\n  : '  Nothing requires attention.';\n\n// --- subject --------------------------------------------------------\nconst prefix = String(cfg.digest_subject_prefix || '[Assign11] Weekly audit digest').trim();\nconst subject = `${prefix} - ${windowEnd} - ${auditRows} events, ${awaitingReview} awaiting review`;\n\n// --- body -----------------------------------------------------------\nconst bodyText = [\n  'AI Legal Document Review & Compliance Platform',\n  'Weekly operations digest',\n  '',\n  `Window: ${windowStart} to ${windowEnd} (${lookbackDays} days)`,\n  '',\n  '--------------------------------------------------------',\n  'HEADLINE',\n  '--------------------------------------------------------',\n  `  Audit events recorded        ${auditRows}`,\n  `  Documents ingested           ${docsIngested}`,\n  `  Clauses awaiting review      ${awaitingReview}`,\n  `  Obligations not yet notified ${unnotified}`,\n  `  Emails queued, unsent        ${outboxQueued}`,\n  '',\n  '--------------------------------------------------------',\n  'NEEDS ATTENTION',\n  '--------------------------------------------------------',\n  attentionBlock,\n  '',\n  '--------------------------------------------------------',\n  `WORKFLOW ACTIVITY (last ${lookbackDays} days)`,\n  '--------------------------------------------------------',\n  table(auditEvents, ['workflow_name', 'event_type'], 'no audit events in this window'),\n  '',\n  '--------------------------------------------------------',\n  'CLAUSE REVIEW STATE (all time)',\n  '--------------------------------------------------------',\n  table(clauseReview, ['review_status'], 'no clauses extracted yet'),\n  '',\n  '--------------------------------------------------------',\n  'DOCUMENT PIPELINE STATE (all time)',\n  '--------------------------------------------------------',\n  table(documentStatus, ['status'], 'no documents ingested yet'),\n  '',\n  '--------------------------------------------------------',\n  `OUTBOX ACTIVITY (last ${lookbackDays} days)`,\n  '--------------------------------------------------------',\n  table(outboxActivity, ['purpose', 'status'], 'no outbound mail queued in this window'),\n  '',\n  '--------------------------------------------------------',\n  'NOTES',\n  '--------------------------------------------------------',\n  '  Review and pipeline states are point-in-time snapshots of the',\n  '  whole database. Event counts are windowed.',\n  '',\n  '  No mail provider is configured. This digest is written to the',\n  '  email_outbox table rather than sent. Adding a Gmail credential',\n  '  and one send node is the only change required.',\n  '',\n  '  Generated automatically by WF6 - Audit Log & Dashboard.',\n].join('\\n');\n\n// --- output ---------------------------------------------------------\nreturn [\n  {\n    json: {\n      to_address: toAddress,\n      subject,\n      body_text: bodyText,\n      audit_rows_in_window: auditRows,\n      clauses_awaiting_review: awaitingReview,\n\n      // the only field the Postgres node reads\n      // $1 purpose, $2 to_address, $3 subject, $4 body_text, $5 status\n      params: ['weekly_digest', toAddress, subject, bodyText, 'queued'],\n    },\n  },\n];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        688,
+        224
+      ],
+      "id": "595f4722-cc19-4fae-b889-337a34e9043c",
+      "name": "Build Digest"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO email_outbox (purpose, to_address, subject, body_text, status) SELECT $1, $2, $3, $4, $5 WHERE NOT EXISTS (SELECT 1 FROM email_outbox WHERE purpose = $1 AND created_at >= date_trunc('day', NOW())) RETURNING id, purpose, to_address, subject, status, created_at;",
+        "options": {
+          "queryReplacement": "={{ $json.params }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "position": [
+        816,
+        224
+      ],
+      "id": "06ad03ee-048e-4693-bd93-ce1eeda14714",
+      "name": "Queue Digest",
+      "alwaysOutputData": true,
+      "credentials": {
+        "postgres": {
+          "id": "uy86ek4B01YIClqb",
+          "name": "Supabase Postgres - Assign11"
+        }
+      }
+    }
+  ],
+  "pinData": {
+    "When Executed by Another Workflow": [
+      {
+        "json": {
+          "workflow_name": "WF6 - Audit Log & Dashboard",
+          "event_type": "Self Test",
+          "document_id": "4",
+          "payload": {
+            "note": "normalise smoke test"
+          },
+          "actor": "abhinav",
+          "execution_id": "manual-001"
+        }
+      }
+    ]
+  },
+  "connections": {
+    "When Executed by Another Workflow": {
+      "main": [
+        [
+          {
+            "node": "Normalise Audit Event",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalise Audit Event": {
+      "main": [
+        [
+          {
+            "node": "Append Audit Event",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Weekly Digest Trigger": {
+      "main": [
+        [
+          {
+            "node": "Config - Digest Settings",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Config - Digest Settings": {
+      "main": [
+        [
+          {
+            "node": "Aggregate Stats",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Aggregate Stats": {
+      "main": [
+        [
+          {
+            "node": "Build Digest",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Digest": {
+      "main": [
+        [
+          {
+            "node": "Queue Digest",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "timeSavedMode": "fixed",
+    "timezone": "Asia/Kolkata",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false
+  },
+  "versionId": "6e42c734-1b6a-4c35-918a-438a8e100115",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "00ec46f575545dfe330c73be775bf8761a159777badf0b97830faa35551d0bb2"
+  },
+  "nodeGroups": [],
+  "id": "GbKl2dQ1NVCodTxH",
+  "tags": []
+}
