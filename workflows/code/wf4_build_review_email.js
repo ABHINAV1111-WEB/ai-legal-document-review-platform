@@ -23,16 +23,30 @@ const request = $('Create Review Request').first().json;
 // Wait node - is what lets the email carry a working link.
 const formUrl = $execution.resumeFormUrl;
 
-// Read from the environment, never hardcoded. A different
-// deployment reviews with a different lawyer and only changes .env.
-const toAddress = $env.REVIEW_EMAIL;
+// ---------------------------------------------------------------
+// Recipient resolved outside the code, never hardcoded. A different
+// deployment reviews with a different lawyer and only edits the
+// config node (or sets the Variable, on an instance that has them).
+//
+// $env is deliberately NOT used: n8n Cloud blocks environment
+// access at the platform level and it cannot be re-enabled without
+// a docker-compose file. Resolution order:
+//   1. n8n Variable REVIEW_EMAIL  (Settings -> Variables, Enterprise)
+//   2. review_email from "Config - Review Settings"
+//
+// Fail loudly on a blank address. A silently missing recipient
+// would create a review request that no human is ever told about,
+// and the execution would sit waiting forever.
+// ---------------------------------------------------------------
+const varsEmail =
+  typeof $vars !== 'undefined' && $vars ? $vars.REVIEW_EMAIL : null;
+const configEmail = $('Config - Review Settings').first().json.review_email;
 
+const toAddress = String(varsEmail || configEmail || '').trim();
 if (!toAddress) {
-  // Fail loudly. A silently missing recipient would create a review
-  // request that no human is ever told about, and the execution
-  // would sit waiting forever.
   throw new Error(
-    'REVIEW_EMAIL is not set. Add it to .env and restart the container.'
+    'REVIEW_EMAIL not resolved. Set review_email on the ' +
+      '"Config - Review Settings" node.'
   );
 }
 
