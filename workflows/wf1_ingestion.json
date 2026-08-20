@@ -11,10 +11,10 @@
       "type": "n8n-nodes-base.webhook",
       "typeVersion": 2.1,
       "position": [
-        -128,
-        64
+        -1296,
+        128
       ],
-      "id": "a2b8322b-de43-42df-8254-8ce2c757a735",
+      "id": "eee3dcb1-3301-4a06-8ab7-54c5a5ad5a83",
       "name": "Webhook",
       "webhookId": "6d06fc23-f2b4-462b-a497-74c04aa0cf8a"
     },
@@ -48,10 +48,10 @@
       "type": "n8n-nodes-base.set",
       "typeVersion": 3.5,
       "position": [
-        32,
-        48
+        -1136,
+        112
       ],
-      "id": "897c4b48-846f-4e2b-90ce-2cbd1f5c92bc",
+      "id": "63721736-eb02-4f35-bfc9-fae56249a763",
       "name": "Normalize Input"
     },
     {
@@ -61,10 +61,10 @@
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        192,
-        48
+        -976,
+        112
       ],
-      "id": "7ac2eb6f-d6b9-409e-9511-dd12bfe9ef2d",
+      "id": "461d75bc-3121-420c-b914-c22715a359e1",
       "name": "Compute File Hash"
     },
     {
@@ -78,15 +78,15 @@
       "type": "n8n-nodes-base.postgres",
       "typeVersion": 2.7,
       "position": [
-        384,
-        64
+        -784,
+        128
       ],
-      "id": "15173325-9bf4-4731-a2f5-81c1761ec279",
+      "id": "a407b9b2-c0d3-42b5-9e00-2ea1a2aac357",
       "name": "Check Duplicate",
       "alwaysOutputData": true,
       "credentials": {
         "postgres": {
-          "id": "K6Aq0yB2ZPCqoQiA",
+          "id": "uy86ek4B01YIClqb",
           "name": "Supabase Postgres - Assign11"
         }
       }
@@ -119,10 +119,10 @@
       "type": "n8n-nodes-base.if",
       "typeVersion": 2.3,
       "position": [
-        784,
-        64
+        -384,
+        128
       ],
-      "id": "4ae7410d-b828-4e5c-bf0d-9b996879f257",
+      "id": "0b38fa80-71ab-468b-9498-2d504a916251",
       "name": "Is Duplicate?"
     },
     {
@@ -135,10 +135,10 @@
       "type": "n8n-nodes-base.readWriteFile",
       "typeVersion": 1.1,
       "position": [
-        944,
-        320
+        -224,
+        384
       ],
-      "id": "19b7ea35-3130-467c-8957-85512b80f403",
+      "id": "f1e537e7-ed59-4226-9408-15ebbde4479e",
       "name": "Save PDF"
     },
     {
@@ -148,10 +148,10 @@
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        592,
-        80
+        -576,
+        144
       ],
-      "id": "1eac4c57-b927-4869-b868-8b7f3452fe08",
+      "id": "ca30d336-a4c7-4803-895b-b060a09b5bcb",
       "name": "Restore Context"
     },
     {
@@ -165,15 +165,15 @@
       "type": "n8n-nodes-base.postgres",
       "typeVersion": 2.7,
       "position": [
-        1152,
-        320
+        -16,
+        384
       ],
-      "id": "9022c1e8-585a-45ed-88cb-0294c52649b4",
+      "id": "83fb16c3-7ac0-4df6-bff7-033f93cde72f",
       "name": "Insert Document",
       "alwaysOutputData": true,
       "credentials": {
         "postgres": {
-          "id": "K6Aq0yB2ZPCqoQiA",
+          "id": "uy86ek4B01YIClqb",
           "name": "Supabase Postgres - Assign11"
         }
       }
@@ -189,10 +189,10 @@
       "type": "n8n-nodes-base.respondToWebhook",
       "typeVersion": 1.5,
       "position": [
-        1344,
-        192
+        176,
+        256
       ],
-      "id": "0fc1838d-cbfb-42f6-9bad-455134b81895",
+      "id": "27fc5793-b1d7-4a40-858d-8cd56cbe1a6e",
       "name": "Respond Accepted"
     },
     {
@@ -206,19 +206,19 @@
       "type": "n8n-nodes-base.respondToWebhook",
       "typeVersion": 1.5,
       "position": [
-        1168,
-        -64
+        0,
+        0
       ],
-      "id": "26d9cd1a-f761-4422-acd7-93a57ecaed79",
+      "id": "bd4b0613-09e5-433e-8ccc-392019f0d5ef",
       "name": "Respond Duplicate"
     },
     {
       "parameters": {
         "workflowId": {
           "__rl": true,
-          "value": "G4fQd4uqFRw8RdgO",
+          "value": "R8f2NzzpDm3AVeMD",
           "mode": "list",
-          "cachedResultUrl": "/workflow/G4fQd4uqFRw8RdgO",
+          "cachedResultUrl": "/workflow/R8f2NzzpDm3AVeMD",
           "cachedResultName": "WF2 - OCR & Segmentation"
         },
         "workflowInputs": {
@@ -258,11 +258,196 @@
       "type": "n8n-nodes-base.executeWorkflow",
       "typeVersion": 1.3,
       "position": [
-        1504,
-        208
+        336,
+        272
       ],
-      "id": "d9845b1a-cf8e-4f80-8e02-33daa5db05d6",
+      "id": "7b7c51fa-0c3e-4961-b2d0-304e930bdae6",
       "name": "Call WF2"
+    },
+    {
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "GbKl2dQ1NVCodTxH",
+          "mode": "list",
+          "cachedResultUrl": "/workflow/GbKl2dQ1NVCodTxH",
+          "cachedResultName": "WF6 - Audit Log & Dashboard"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "workflow_name": "WF1 - Ingestion & Storage",
+            "event_type": "document_ingested",
+            "document_id": "={{ $json.id ? Number($json.id) : 0 }}",
+            "actor": "system",
+            "execution_id": "={{ $execution.id }}",
+            "payload": "={{ ({ filename: $json.filename, file_hash: $json.file_hash, status: $json.status, storage_path: $('Restore Context').item.json.storage_path, file_size_bytes: $('Restore Context').item.json.file_size_bytes }) }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "workflow_name",
+              "displayName": "workflow_name",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "event_type",
+              "displayName": "event_type",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "document_id",
+              "displayName": "document_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "number"
+            },
+            {
+              "id": "payload",
+              "displayName": "payload",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "object"
+            },
+            {
+              "id": "actor",
+              "displayName": "actor",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "execution_id",
+              "displayName": "execution_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": true
+        },
+        "options": {
+          "waitForSubWorkflow": false
+        }
+      },
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.3,
+      "position": [
+        128,
+        640
+      ],
+      "id": "41420d2d-8cd8-4f89-ba45-390d1cf1a722",
+      "name": "Log Ingest to WF6",
+      "notesInFlow": false,
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "GbKl2dQ1NVCodTxH",
+          "mode": "list",
+          "cachedResultUrl": "/workflow/GbKl2dQ1NVCodTxH",
+          "cachedResultName": "WF6 - Audit Log & Dashboard"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "workflow_name": "WF1 - Ingestion & Storage",
+            "event_type": "duplicate_rejected",
+            "document_id": "={{ $('Restore Context').item.json.existing_id ? Number($('Restore Context').item.json.existing_id) : 0 }}",
+            "actor": "system",
+            "execution_id": "={{ $execution.id }}",
+            "payload": "={{ ({ filename: $('Restore Context').item.json.filename, file_hash: $('Restore Context').item.json.file_hash, existing_filename: $('Restore Context').item.json.existing_filename, existing_uploaded_at: $('Restore Context').item.json.existing_uploaded_at, outcome: 'rejected_as_duplicate' }) }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "workflow_name",
+              "displayName": "workflow_name",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "event_type",
+              "displayName": "event_type",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "document_id",
+              "displayName": "document_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "number"
+            },
+            {
+              "id": "payload",
+              "displayName": "payload",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "object"
+            },
+            {
+              "id": "actor",
+              "displayName": "actor",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "execution_id",
+              "displayName": "execution_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": true
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.3,
+      "position": [
+        208,
+        -32
+      ],
+      "id": "29107a6e-c55b-4aec-921f-836c94e7f4b3",
+      "name": "Log Duplicate to WF6",
+      "onError": "continueErrorOutput"
     }
   ],
   "pinData": {},
@@ -358,6 +543,11 @@
             "node": "Respond Accepted",
             "type": "main",
             "index": 0
+          },
+          {
+            "node": "Log Ingest to WF6",
+            "type": "main",
+            "index": 0
           }
         ]
       ]
@@ -372,20 +562,29 @@
           }
         ]
       ]
+    },
+    "Respond Duplicate": {
+      "main": [
+        [
+          {
+            "node": "Log Duplicate to WF6",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     }
   },
-  "active": false,
+  "active": true,
   "settings": {
     "executionOrder": "v1",
-    "binaryMode": "separate",
-    "availableInMCP": false
+    "binaryMode": "separate"
   },
-  "versionId": "b3e47ca2-ea86-4e7c-a4ff-60cfaeab9f04",
+  "versionId": "c3d554bb-1136-4a9e-864d-83ee1522c537",
   "meta": {
-    "templateCredsSetupCompleted": true,
-    "instanceId": "0031f5595dbe624837214def158854fa79038e53274f4301c3ad8528756175ac"
+    "instanceId": "00ec46f575545dfe330c73be775bf8761a159777badf0b97830faa35551d0bb2"
   },
   "nodeGroups": [],
-  "id": "usG1BmNUY8ltGJ0o",
+  "id": "VgH8nIZiFCbQ7QzA",
   "tags": []
 }

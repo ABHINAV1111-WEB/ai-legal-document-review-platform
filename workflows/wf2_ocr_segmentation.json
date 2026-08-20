@@ -1,0 +1,71 @@
+{
+  "name": "WF2 - OCR & Segmentation",
+  "nodes": [
+    {
+      "parameters": {
+        "workflowInputs": {
+          "values": [
+            {
+              "name": "document_id",
+              "type": "number"
+            },
+            {
+              "name": "storage_path"
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        0
+      ],
+      "id": "ff39ac04-cdca-464b-bc00-aeee5ea48a45",
+      "name": "When Executed by Another Workflow"
+    },
+    {
+      "parameters": {
+        "fileSelector": "={{ $json.storage_path }}",
+        "options": {
+          "dataPropertyName": "data"
+        }
+      },
+      "type": "n8n-nodes-base.readWriteFile",
+      "typeVersion": 1.1,
+      "position": [
+        208,
+        0
+      ],
+      "id": "cb970605-5643-4d68-91a9-e1114fd54526",
+      "name": "Read PDF"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "When Executed by Another Workflow": {
+      "main": [
+        [
+          {
+            "node": "Read PDF",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "availableInMCP": false
+  },
+  "versionId": "49989390-861f-4189-98e9-3257ea406654",
+  "meta": {
+    "instanceId": "0031f5595dbe624837214def158854fa79038e53274f4301c3ad8528756175ac"
+  },
+  "nodeGroups": [],
+  "id": "G4fQd4uqFRw8RdgO",
+  "tags": []
+}

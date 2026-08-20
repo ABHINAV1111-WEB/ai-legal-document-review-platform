@@ -18,7 +18,7 @@
         0,
         0
       ],
-      "id": "b18aed23-0f76-4595-bb80-f5557ff5714f",
+      "id": "25f16ecd-8727-4cfd-966d-aa940f4e5dc4",
       "name": "When Executed by Another Workflow"
     },
     {
@@ -35,12 +35,12 @@
         208,
         0
       ],
-      "id": "54f28db2-9e00-48bb-995d-da8398408a00",
+      "id": "fb2b205f-fe7b-4495-81fd-9de5f4b5913c",
       "name": "Fetch Segments",
       "alwaysOutputData": true,
       "credentials": {
         "postgres": {
-          "id": "K6Aq0yB2ZPCqoQiA",
+          "id": "uy86ek4B01YIClqb",
           "name": "Supabase Postgres - Assign11"
         }
       }
@@ -55,7 +55,7 @@
         416,
         0
       ],
-      "id": "bf770aec-5471-4211-92cd-25574943bfc3",
+      "id": "62f42b16-d3a8-43ae-822f-8528a0bbb480",
       "name": "Build Batches"
     },
     {
@@ -96,12 +96,12 @@
         624,
         0
       ],
-      "id": "bd215e45-bc85-44b7-91d6-19ff1406c262",
+      "id": "576ecbe0-d609-429b-bdf5-87e7d2ed9f35",
       "name": "Extract Clauses",
       "credentials": {
         "openAiApi": {
-          "id": "tqFr98mgXbyqjHSX",
-          "name": "OpenAI - Assign11"
+          "id": "H8CMYmtkOwmPiIpf",
+          "name": "OpenAI account"
         }
       }
     },
@@ -115,7 +115,7 @@
         976,
         0
       ],
-      "id": "b9ee7947-b2d9-4a92-8790-d7c483743deb",
+      "id": "14165891-f9f9-4857-8a3d-3fd0dc704a5c",
       "name": "Parse & Validate"
     },
     {
@@ -128,7 +128,7 @@
         1184,
         0
       ],
-      "id": "c1ee2f6b-fe53-4f72-89b5-06a4e5558d88",
+      "id": "e9caf0d7-4ef5-48e0-9896-9000964f6136",
       "name": "Score Risk"
     },
     {
@@ -145,13 +145,13 @@
         1392,
         0
       ],
-      "id": "8adf8e42-0716-41b3-9c84-4621dc7cf81a",
+      "id": "a5971c87-65ea-4663-a6e9-59320a42a855",
       "name": "Delete Old Clauses",
       "executeOnce": true,
       "alwaysOutputData": true,
       "credentials": {
         "postgres": {
-          "id": "K6Aq0yB2ZPCqoQiA",
+          "id": "uy86ek4B01YIClqb",
           "name": "Supabase Postgres - Assign11"
         }
       }
@@ -166,7 +166,7 @@
         1600,
         0
       ],
-      "id": "2dd24136-f894-48e5-942c-6c2089ec4d6f",
+      "id": "1108f6c5-6464-41a8-acc7-3d497a088072",
       "name": "Restore Rows"
     },
     {
@@ -183,14 +183,106 @@
         1808,
         0
       ],
-      "id": "6019e0e8-b9ce-4718-9e21-a1ecfc055150",
+      "id": "a6e9a00b-ba19-492f-9337-b9c6ac65d6bb",
       "name": "Insert Clauses",
       "credentials": {
         "postgres": {
-          "id": "K6Aq0yB2ZPCqoQiA",
+          "id": "uy86ek4B01YIClqb",
           "name": "Supabase Postgres - Assign11"
         }
       },
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "GbKl2dQ1NVCodTxH",
+          "mode": "list",
+          "cachedResultUrl": "/workflow/GbKl2dQ1NVCodTxH",
+          "cachedResultName": "WF6 - Audit Log & Dashboard"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "workflow_name": "WF3 - AI Risk Analysis",
+            "event_type": "clauses_extracted",
+            "document_id": "={{ Number($('Restore Rows').first().json.document_id) }}",
+            "actor": "system",
+            "execution_id": "={{ $execution.id }}",
+            "payload": "={{ ({ clauses_inserted: $('Restore Rows').all().length, pending_review: $('Restore Rows').all().filter(r => r.json.review_status === 'pending_review').length, absent: $('Restore Rows').all().filter(r => r.json.is_absent === true).length, high_or_critical: $('Restore Rows').all().filter(r => ['high','critical'].includes(r.json.risk_level)).length, batch_count: Number($('Build Batches').first().json.batch_count || 0), model: $('Restore Rows').first().json.model, prompt_version: $('Restore Rows').first().json.prompt_version, confidence_threshold: $('Restore Rows').first().json.confidence_threshold }) }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "workflow_name",
+              "displayName": "workflow_name",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "event_type",
+              "displayName": "event_type",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "document_id",
+              "displayName": "document_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "number"
+            },
+            {
+              "id": "payload",
+              "displayName": "payload",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "object"
+            },
+            {
+              "id": "actor",
+              "displayName": "actor",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "execution_id",
+              "displayName": "execution_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": true
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.3,
+      "position": [
+        2064,
+        -176
+      ],
+      "id": "5b41c087-8f2a-4589-bace-f07baa53a181",
+      "name": "Log Analysis to WF6",
+      "executeOnce": true,
       "onError": "continueErrorOutput"
     }
   ],
@@ -283,20 +375,29 @@
           }
         ]
       ]
+    },
+    "Insert Clauses": {
+      "main": [
+        [
+          {
+            "node": "Log Analysis to WF6",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     }
   },
   "active": true,
   "settings": {
     "executionOrder": "v1",
-    "binaryMode": "separate",
-    "availableInMCP": false
+    "binaryMode": "separate"
   },
-  "versionId": "b2bac3fd-15d5-4b0f-bf2f-4c51c2b73022",
+  "versionId": "02d439b3-ad59-4a7b-a891-c085c66e3120",
   "meta": {
-    "templateCredsSetupCompleted": true,
-    "instanceId": "0031f5595dbe624837214def158854fa79038e53274f4301c3ad8528756175ac"
+    "instanceId": "00ec46f575545dfe330c73be775bf8761a159777badf0b97830faa35551d0bb2"
   },
   "nodeGroups": [],
-  "id": "MzNkVp7eq3NHaU2F",
+  "id": "720jKgJ1W5pp867C",
   "tags": []
 }
