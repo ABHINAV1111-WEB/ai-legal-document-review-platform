@@ -172,22 +172,7 @@
       }
     }
   ],
-  "pinData": {
-    "When Executed by Another Workflow": [
-      {
-        "json": {
-          "workflow_name": "WF6 - Audit Log & Dashboard",
-          "event_type": "Self Test",
-          "document_id": "4",
-          "payload": {
-            "note": "normalise smoke test"
-          },
-          "actor": "abhinav",
-          "execution_id": "manual-001"
-        }
-      }
-    ]
-  },
+  "pinData": {},
   "connections": {
     "When Executed by Another Workflow": {
       "main": [
@@ -263,7 +248,8 @@
     "timeSavedMode": "fixed",
     "timezone": "Asia/Kolkata",
     "callerPolicy": "workflowsFromSameOwner",
-    "availableInMCP": false
+    "availableInMCP": false,
+    "errorWorkflow": "A3jZ3fejjpxrNE7m"
   },
   "versionId": "6e42c734-1b6a-4c35-918a-438a8e100115",
   "meta": {

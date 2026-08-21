@@ -578,7 +578,12 @@
   "active": true,
   "settings": {
     "executionOrder": "v1",
-    "binaryMode": "separate"
+    "binaryMode": "separate",
+    "timeSavedMode": "fixed",
+    "errorWorkflow": "A3jZ3fejjpxrNE7m",
+    "timezone": "Asia/Kolkata",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false
   },
   "versionId": "c3d554bb-1136-4a9e-864d-83ee1522c537",
   "meta": {

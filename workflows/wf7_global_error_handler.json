@@ -1,0 +1,350 @@
+{
+  "name": "WF7 - Global Error Handler",
+  "nodes": [
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.errorTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        0
+      ],
+      "id": "39ae1d48-f6a5-4211-b3b0-b9bca4036de6",
+      "name": "Error Trigger"
+    },
+    {
+      "parameters": {
+        "jsCode": "// WF7 - Global Error Handler :: Classify Error\n// Input : one item from the Error Trigger\n// Output: one flat item describing the failure + a retryable/fatal verdict\n//\n// Why classify at all: a timeout and a bad API key both \"fail\", but one is\n// worth retrying and one needs a human. Everything downstream branches on\n// is_retryable, so the decision is made once, here, and never re-derived.\n\nconst input = $input.first().json || {};\n\nconst execution = input.execution || {};\nconst trigger   = input.trigger   || {};   // set instead of `execution` when a TRIGGER fails\nconst workflow  = input.workflow  || {};\n\nconst errObj = execution.error || trigger.error || {};\n\n// ---- raw facts -------------------------------------------------------\nconst message = String(\n  errObj.message || 'Unknown error - n8n supplied no message'\n).slice(0, 2000);\n\nconst stack = String(errObj.stack || '').slice(0, 4000);\n\nconst failedNode = String(\n  execution.lastNodeExecuted || (errObj.node && errObj.node.name) || 'unknown'\n);\n\n// httpCode arrives as a number OR a string depending on the node that threw.\nconst httpCodeRaw = errObj.httpCode !== undefined ? errObj.httpCode : null;\nconst httpCode = httpCodeRaw === null ? null : Number(httpCodeRaw);\n\n// ---- classification --------------------------------------------------\n// Match on the message AND the stack: n8n often puts the useful token\n// (ETIMEDOUT, 429) in the stack while the message stays generic.\nconst haystack = (message + ' ' + stack).toLowerCase();\n\nconst has = (...needles) => needles.some((n) => haystack.includes(n));\n\nlet category = 'unknown';\n\nif (has('etimedout', 'econnreset', 'econnrefused', 'enotfound', 'eai_again',\n        'socket hang up', 'network', 'timeout', 'timed out')) {\n  category = 'network';\n} else if (has('rate limit', 'rate_limit', 'too many requests', '429', 'overloaded')) {\n  category = 'rate_limit';\n} else if (has('unauthorized', 'forbidden', '401', '403', 'invalid api key',\n               'authentication', 'credentials')) {\n  category = 'auth';\n} else if (has('duplicate key', 'violates', 'constraint', 'relation ', 'syntax error at or near')) {\n  category = 'database';\n} else if (has('service unavailable', 'bad gateway', 'gateway timeout',\n               'internal server error', '500', '502', '503', '504')) {\n  category = 'server_error';\n} else if (has('is not valid json', 'cannot read propert', 'undefined',\n               'expects a', 'required')) {\n  category = 'validation';\n}\n\n// httpCode is stronger evidence than text matching - let it override.\nif (httpCode === 429) category = 'rate_limit';\nelse if (httpCode === 401 || httpCode === 403) category = 'auth';\nelse if (httpCode !== null && httpCode >= 500) category = 'server_error';\n\n// Retryable = the same call, unchanged, might succeed in five minutes.\n// Auth, database and validation failures will fail identically forever.\nconst RETRYABLE = ['network', 'rate_limit', 'server_error'];\nconst isRetryable = RETRYABLE.includes(category);\n\n// ---- output ----------------------------------------------------------\nreturn [{\n  json: {\n    workflow_name:  String(workflow.name || 'unknown workflow'),\n    workflow_id:    String(workflow.id || ''),\n    execution_id:   String(execution.id || trigger.id || ''),   // number on cloud -> force string\n    execution_url:  String(execution.url || ''),\n    run_mode:       String(execution.mode || trigger.mode || 'unknown'),\n\n    failed_node:    failedNode,\n    error_message:  message,\n    error_stack:    stack,\n    http_code:      httpCode,\n\n    category:       category,\n    is_retryable:   isRetryable,\n    severity:       isRetryable ? 'warning' : 'critical',\n\n    // WF7 usually has no document context. WF6's Normalise Audit Event\n    // turns 0 into NULL, and audit_log.document_id is deliberately not a FK.\n    document_id:    0,\n\n    occurred_at:    new Date().toISOString(),\n  },\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        224,
+        0
+      ],
+      "id": "c1a2bb83-9571-4eed-86fb-de4c9525d861",
+      "name": "Classify Error"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "d9a3d2aa-c108-487a-af0a-8e51902a4c55",
+              "leftValue": "={{ $json.is_retryable }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        672,
+        0
+      ],
+      "id": "e9d34e6d-16a1-47db-ae3d-eecb2056804d",
+      "name": "If Retryable"
+    },
+    {
+      "parameters": {
+        "mode": "raw",
+        "jsonOutput": "{\n  \"alert_email\": \"jok6557@gmail.com\",\n  \"subject_prefix\": \"[Assign11 ERROR]\",\n  \"max_body_chars\": 6000\n}",
+        "includeOtherFields": true,
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.5,
+      "position": [
+        448,
+        0
+      ],
+      "id": "2617ac9e-f0f8-48ab-a92f-cdfc44c2832f",
+      "name": "Config - Alert Settings"
+    },
+    {
+      "parameters": {
+        "mode": "raw",
+        "jsonOutput": "{\n  \"urgency_label\": \"RETRYABLE\",\n  \"guidance_text\": \"This failure looks transient (network, rate limit, or upstream 5xx). The same call may succeed on a later run. No action needed unless the same workflow and node appear here repeatedly.\"\n}",
+        "includeOtherFields": true,
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.5,
+      "position": [
+        896,
+        -96
+      ],
+      "id": "7fc93095-6596-49ba-9779-7691bf8efed3",
+      "name": "Set - Retryable Albert"
+    },
+    {
+      "parameters": {
+        "mode": "raw",
+        "jsonOutput": "{\n  \"urgency_label\": \"FATAL\",\n  \"guidance_text\": \"This failure will not resolve on its own. Credentials, SQL, schema, or data shape is wrong. The run must be fixed and re-triggered by hand.\"\n}",
+        "includeOtherFields": true,
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.5,
+      "position": [
+        896,
+        96
+      ],
+      "id": "034d38f9-6ffc-49cd-8bce-d23217ad0f51",
+      "name": "Set - Fatal Alert"
+    },
+    {
+      "parameters": {
+        "jsCode": "// WF7 - Global Error Handler :: Build Alert\n// Input : one item from either Set - Retryable Alert or Set - Fatal Alert\n// Output: one item carrying subject, body_text and a ready-made params array\n//         for the Postgres node (bug #2 - a Code-built array passes bare).\n\nconst e = $input.first().json || {};\n\nconst maxBody = Number(e.max_body_chars) || 6000;\n\nconst subject =\n  `${e.subject_prefix} ${e.urgency_label} - ${e.workflow_name} / ${e.failed_node}`\n  .slice(0, 500);\n\n// Stack goes last: it is the least readable part and the first thing to lose\n// if the body gets truncated.\nconst lines = [\n  `${e.urgency_label} error in workflow: ${e.workflow_name}`,\n  '',\n  `Failed node   : ${e.failed_node}`,\n  `Category      : ${e.category}`,\n  `Severity      : ${e.severity}`,\n  `HTTP code     : ${e.http_code === null ? 'n/a' : e.http_code}`,\n  `Run mode      : ${e.run_mode}`,\n  `Occurred at   : ${e.occurred_at}`,\n  `Execution     : ${e.execution_id}`,\n  `Execution URL : ${e.execution_url || 'n/a'}`,\n  '',\n  'MESSAGE',\n  e.error_message,\n  '',\n  'WHAT THIS MEANS',\n  e.guidance_text,\n  '',\n  'STACK',\n  e.error_stack || '(none supplied)',\n];\n\nlet bodyText = lines.join('\\n');\nif (bodyText.length > maxBody) {\n  bodyText = bodyText.slice(0, maxBody - 20) + '\\n...[truncated]';\n}\n\n// Dedup key: one alert per workflow+node+category per calendar day.\n// A cron that fails every run would otherwise queue 24 identical emails.\nconst day = String(e.occurred_at || '').slice(0, 10);   // YYYY-MM-DD\nconst dedupKey = `${e.workflow_name}|${e.failed_node}|${e.category}|${day}`;\n\nconst toAddress = String(e.alert_email || '').trim();\nif (!toAddress) {\n  throw new Error('alert_email not resolved - check Config - Alert Settings');\n}\n\nreturn [{\n  json: {\n    subject,\n    body_text: bodyText,\n    to_address: toAddress,\n    dedup_key: dedupKey,\n\n    // carried through for the WF6 audit call\n    workflow_name: e.workflow_name,\n    failed_node:   e.failed_node,\n    category:      e.category,\n    severity:      e.severity,\n    is_retryable:  e.is_retryable,\n    execution_id:  e.execution_id,\n    error_message: e.error_message,\n\n    // purpose, to_address, subject, body_text - matches Queue Alert's $1..$4\n    params: ['error_alert', toAddress, subject, bodyText],\n  },\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1168,
+        -16
+      ],
+      "id": "209a9141-8c5f-4a8d-af7e-28fa31713eca",
+      "name": "Build Alert"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO email_outbox (purpose, to_address, subject, body_text) SELECT $1, $2, $3, $4 WHERE NOT EXISTS (SELECT 1 FROM email_outbox WHERE purpose = 'error_alert' AND subject = $3 AND created_at >= date_trunc('day', NOW())) RETURNING id, purpose, subject, created_at",
+        "options": {
+          "queryReplacement": "={{ $json.params }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "position": [
+        1392,
+        -16
+      ],
+      "id": "0f85f163-974a-4324-a31a-03686a442620",
+      "name": "Queue Alert",
+      "alwaysOutputData": true,
+      "credentials": {
+        "postgres": {
+          "id": "uy86ek4B01YIClqb",
+          "name": "Supabase Postgres - Assign11"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "GbKl2dQ1NVCodTxH",
+          "mode": "list",
+          "cachedResultUrl": "/workflow/GbKl2dQ1NVCodTxH",
+          "cachedResultName": "WF6 - Audit Log & Dashboard"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "workflow_name": "={{ 'WF7 - Global Error Handler' }}",
+            "event_type": "={{ 'workflow_error' }}",
+            "actor": "={{ 'system' }}",
+            "execution_id": "={{ $execution.id }}",
+            "document_id": "={{ 0 }}",
+            "payload": "={{ ({ failed_workflow: $('Build Alert').first().json.workflow_name, failed_node: $('Build Alert').first().json.failed_node, category: $('Build Alert').first().json.category, severity: $('Build Alert').first().json.severity, is_retryable: $('Build Alert').first().json.is_retryable, failed_execution_id: $('Build Alert').first().json.execution_id, error_message: $('Build Alert').first().json.error_message, alert_queued: $json.id ? true : false }) }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "workflow_name",
+              "displayName": "workflow_name",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "event_type",
+              "displayName": "event_type",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "document_id",
+              "displayName": "document_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "number"
+            },
+            {
+              "id": "payload",
+              "displayName": "payload",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "object"
+            },
+            {
+              "id": "actor",
+              "displayName": "actor",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "execution_id",
+              "displayName": "execution_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": true
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.3,
+      "position": [
+        1616,
+        -16
+      ],
+      "id": "31a2fde4-2caa-4349-b6d9-a0acdab8e9db",
+      "name": "Call WF6",
+      "onError": "continueErrorOutput"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Error Trigger": {
+      "main": [
+        [
+          {
+            "node": "Classify Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Classify Error": {
+      "main": [
+        [
+          {
+            "node": "Config - Alert Settings",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Config - Alert Settings": {
+      "main": [
+        [
+          {
+            "node": "If Retryable",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "If Retryable": {
+      "main": [
+        [
+          {
+            "node": "Set - Retryable Albert",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Set - Fatal Alert",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Set - Fatal Alert": {
+      "main": [
+        [
+          {
+            "node": "Build Alert",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Set - Retryable Albert": {
+      "main": [
+        [
+          {
+            "node": "Build Alert",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Alert": {
+      "main": [
+        [
+          {
+            "node": "Queue Alert",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Queue Alert": {
+      "main": [
+        [
+          {
+            "node": "Call WF6",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "versionId": "0cabb45e-0bc9-40cf-a37f-c503e0a95658",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "00ec46f575545dfe330c73be775bf8761a159777badf0b97830faa35551d0bb2"
+  },
+  "nodeGroups": [],
+  "id": "A3jZ3fejjpxrNE7m",
+  "tags": []
+}
