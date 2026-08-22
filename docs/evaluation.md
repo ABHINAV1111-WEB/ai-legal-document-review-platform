@@ -1,6 +1,6 @@
 # Evaluation
 
-Generated 2026-08-21 10:45 UTC by `scripts/evaluate.py`.
+Generated 2026-08-22 07:36 UTC by `scripts/evaluate.py`.
 
 - Split: **dev**
 - Documents scored: **17**
